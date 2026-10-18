@@ -27,7 +27,7 @@ test('page watch stores an atomic profile-local checkpoint without form values o
     assert.equal(saved.url, 'https://example.com/account');
     assert.equal(listWatches(profileDir).length, 1);
     const file = join(profileDir, 'page-watches', `${saved.id}.json`);
-    assert.equal(statSync(file).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(statSync(file).mode & 0o777, 0o600);
     assert.doesNotMatch(readFileSync(file, 'utf8'), /private input|token=secret/);
   } finally { rmSync(base, { recursive: true, force: true }); }
 });
