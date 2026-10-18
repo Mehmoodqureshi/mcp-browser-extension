@@ -1,3 +1,34 @@
+## 0.9.30 - 2026-10-19
+
+Screenshots no longer get stuck, the agent stays in the background, and six
+ways around the site allowlist are closed. Found by a new end-to-end suite that
+drives the real extension in Chromium.
+
+- fix: one frozen page or open alert() could stall screenshots in every tab.
+  The tab border's page calls are bounded (2s), every debugger command and the
+  pre-capture measure are bounded (20s, PDF 25s), and a timed-out capture no
+  longer falls back to activating the tab.
+- fix: `tab_select` picks the agent's tab without bringing it to the front;
+  pass `show: true` to raise it. The visible-tab screenshot fallback puts the
+  person's tab back and never focuses the window.
+- fix: `navigate` could return the page it was leaving; it now waits for its
+  own page. `networkidle` waits for the quiet period. `back`/`forward` work
+  after `navigate` and report `moved`. `tab_new` with a url returns once the
+  page has loaded.
+- security: `get_cookies { url }`, `download_file` (by URL or link) and
+  `tab_new { url }` check that URL against the allowlist. Uploads compare real
+  paths, so a symlink cannot leave the uploads dir. A redirect off the
+  allowlist no longer returns that page's title. The extension's own gate now
+  covers snapshot, get_cookies, storage, select_option and download_file.
+- fix: `download_file` from a link element; `eval` honours `awaitPromise`;
+  `press` honours modifiers; `type` honours `keyEvents` and `pressEnter`
+  (Enter submits the form); `fill_form` sets a checkbox to the value given
+  instead of toggling it, also from a second AI session; `snapshot` names
+  `<label>`ed fields and reports truncation.
+- test: `npm run test:e2e` runs 120 end-to-end tests against the real
+  extension; unit coverage of the server is 94% of lines.
+- extension: 0.9.30; a new Store ZIP is required.
+
 ## 0.9.29 - 2026-10-18
 
 Console and network debugging work with a real browser, plus page checkpoints.
