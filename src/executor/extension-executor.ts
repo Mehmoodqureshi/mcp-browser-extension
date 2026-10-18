@@ -220,13 +220,23 @@ export class ExtensionExecutor implements Executor {
     return (await this.send('type', { ...targetParams(t), ...frameParams(opts), text: value, clear: true, keyEvents: false }, { tabId: opts?.tabId })) as ActionOk;
   }
   async fillFields(fields: FillFieldOp[], opts?: { tabId?: TabId } & FrameOpts): Promise<{ filled: number } | null> {
-    // An extension that predates the op never advertised it: let the caller go field by field.
-    if (!this.bridge.hasCap(this.activeProfile(), WIRE_CAP_FILL_FORM)) return null;
-    const res = (await this.send(
-      'fill_form',
-      { ops: fields, ...frameParams(opts) },
-      { tabId: opts?.tabId, timeoutMs: fillFormTimeoutMs(fields.length) },
-    )) as FillFormWireResult;
+    // No capability pre-check alone: a server relaying through another one (a
+    // second AI session) cannot see the extension's caps, so ask and read the
+    // answer. An extension that predates the op says it has no such method:
+    // then let the caller go field by field.
+    let res: FillFormWireResult;
+    try {
+      res = (await this.send(
+        'fill_form',
+        { ops: fields, ...frameParams(opts) },
+        { tabId: opts?.tabId, timeoutMs: fillFormTimeoutMs(fields.length) },
+      )) as FillFormWireResult;
+    } catch (err) {
+      if (!this.bridge.hasCap(this.activeProfile(), WIRE_CAP_FILL_FORM) && err instanceof ExecutorError && /unhandled method/.test(err.message)) {
+        return null;
+      }
+      throw err;
+    }
     if (res.error) {
       // Say how far the batch got: the fields before this one DID land, and a
       // blind retry of the whole form would write them a second time.

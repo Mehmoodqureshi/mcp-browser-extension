@@ -57,6 +57,7 @@
     "typecheck:ext": "tsc -p tsconfig.ext.json",
     "clean": "rimraf dist",
     "test": "npm run clean && npm run build && npm run build:ext && node --test dist/test/*.test.js",
+    "test:e2e": "npm run build && npm run build:ext && RUN_E2E=1 node --test --test-concurrency=1 dist/test/e2e/*.test.js",
     "test:hitl": "npm run build && node dist/hitl/index.js",
     "prepack": "npm run clean && npm run build && npm run build:ext"
   },

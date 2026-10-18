@@ -371,3 +371,31 @@ test('toWirePolicy carries allowObservers to the extension and keeps uploadsDir 
 });
 
 void DEFAULT_POLICY; // referenced to keep the import meaningful across refactors
+
+// --- tab_select picks the agent's tab without pulling the person off theirs ---
+
+test('tab_select works in the background unless show:true asks to bring it forward', async () => {
+  const ex = twoTabs();
+  let shown = 0;
+  const real = ex.tabSelect.bind(ex);
+  ex.tabSelect = async (id) => {
+    shown += 1;
+    return real(id);
+  };
+  const r = await dispatchToolCall('tab_select', { tabId: 'extension:stub:2' });
+  assert.equal(r.isError, undefined);
+  assert.equal(shown, 0, 'a plain tab_select must not activate the tab');
+  assert.match(textOf(r), /"shown": false/);
+  // Later calls without a tabId follow the pick: the background tab is not allowlisted.
+  const read = await dispatchToolCall('get_text', {});
+  assert.equal(read.isError, true);
+  assert.match(textOf(read), /evil\.test/);
+
+  const s = await dispatchToolCall('tab_select', { tabId: 'extension:stub:2', show: true });
+  assert.equal(s.isError, undefined);
+  assert.equal(shown, 1);
+
+  const missing = await dispatchToolCall('tab_select', { tabId: 'extension:stub:99' });
+  assert.equal(missing.isError, true);
+  assert.match(textOf(missing), /tabs_list/);
+});

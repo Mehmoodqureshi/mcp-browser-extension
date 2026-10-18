@@ -157,8 +157,15 @@ export async function fillForm(
     for (const { selector, value } of ops) {
       const target: Target = { selector };
       if (typeof value === 'boolean') {
-        // Checkbox/radio: a click toggles it.
-        await ex.click(target, opts);
+        // Checkbox/radio: set the state. A bare click toggles, so it is only
+        // right for a backend that cannot set it, and only to turn it on.
+        if (ex.setChecked) await ex.setChecked(target, value, opts);
+        else if (value) await ex.click(target, opts);
+        else {
+          // Unticking needs the current state, which this backend cannot read;
+          // a silent no-op would report a field as filled that was not.
+          throw new ExecutorError('UNSUPPORTED', `cannot set ${selector} to unchecked with this browser backend; update the MCP Browser Extension`);
+        }
       } else {
         await ex.fill(target, value, opts);
       }

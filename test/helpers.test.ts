@@ -161,11 +161,18 @@ test('fillForm partial failure throws the failing field and never submits', asyn
 });
 
 test('fillForm falls back to per-field writes when the extension predates fill_form', async () => {
-  const { ex, sent } = fakeBridge([], () => assert.fail('fill_form must not be sent'));
+  const old = () => {
+    throw new ExecutorError('TARGET_GONE', 'unhandled method: fill_form');
+  };
+  const { ex, sent } = fakeBridge([], old);
   const out = await fillForm(ex, { fields: { '#email': 'a@b.com', '#agree': true } });
   assert.deepEqual(out, { filled: 2, submitted: false });
-  assert.deepEqual(sent.map((s) => s.method), ['type', 'click']);
-  assert.equal(sent[0].params.clear, true);
+  assert.deepEqual(sent.map((s) => s.method), ['fill_form', 'type', 'click']);
+  assert.equal(sent[1].params.clear, true);
+  // Unticking needs the box's state, which the per-field path cannot read: say so
+  // rather than report a field filled that was not.
+  const { ex: ex2 } = fakeBridge([], old);
+  await assert.rejects(fillForm(ex2, { fields: { '#agree': false } }), (err: unknown) => err instanceof ExecutorError && err.code === 'UNSUPPORTED');
 });
 
 test('extractLinks handles thrown eval denial, decoded attributes and relative URLs', async () => {

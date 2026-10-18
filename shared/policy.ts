@@ -27,6 +27,12 @@ const READ_CONTENT: ReadonlySet<WireMethod> = new Set<WireMethod>([
   'frames_list',
   'observers',
   'print_pdf',
+  // The page's accessibility tree, its cookies (session secrets), and its
+  // web storage are content too. A storage write is refused in safe mode by
+  // the extension's storage handler; the domain gate here covers every op.
+  'snapshot',
+  'get_cookies',
+  'storage',
 ]);
 
 /** Content-mutating actions — URL-gated AND mutation-gated. */
@@ -38,6 +44,7 @@ const MUTATE_CONTENT: ReadonlySet<WireMethod> = new Set<WireMethod>([
   'hover',
   'scroll',
   'fill_form',
+  'select_option',
 ]);
 
 /** Navigation — URL-gated by the DESTINATION url, and mutation-gated. */
@@ -72,7 +79,9 @@ export function isUrlGated(method: WireMethod): boolean {
     MUTATE_CONTENT.has(method) ||
     NAVIGATION.has(method) ||
     method === 'eval' ||
-    method === 'upload_file'
+    method === 'upload_file' ||
+    // Gated on where the bytes come from: the URL when one is given, else the tab.
+    method === 'download_file'
   );
 }
 

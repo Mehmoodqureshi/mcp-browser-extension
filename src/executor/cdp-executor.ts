@@ -310,8 +310,15 @@ export class CdpExecutor implements Executor {
     } catch (err) {
       const msg = (err as Error).message ?? '';
       if (CLOSED_TARGET.test(msg)) {
+        const stale = this.context;
         this.context = null;
         this.tabs.clear();
+        // A browser we launched is ours to close; otherwise the relaunch on the
+        // next call leaves this one running. Never close the user's Chrome.
+        if (this.opts.mode !== 'connect' && this.launched) {
+          this.launched = false;
+          void stale?.close().catch(() => undefined);
+        }
         throw new ExecutorError('DETACHED', 'browser target closed or crashed; reconnect and retry');
       }
       throw err;
@@ -427,6 +434,13 @@ export class CdpExecutor implements Executor {
       } catch {
         await loc.selectOption(values.map((label) => ({ label })));
       }
+      return this.ok;
+    });
+  }
+  async setChecked(t: Target, checked: boolean, opts?: { tabId?: TabId }): Promise<ActionOk> {
+    return this.guard(async () => {
+      const p = await this.resolveTab(opts?.tabId);
+      await this.locator(p, t).setChecked(checked);
       return this.ok;
     });
   }

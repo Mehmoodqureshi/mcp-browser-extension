@@ -92,6 +92,12 @@ export function collectSnapshot(interactiveOnly = true, max = 200, locator: Snap
       const t = labelledby.split(/\s+/).map((id) => document.getElementById(id)?.innerText ?? '').join(' ').trim();
       if (t) return t;
     }
+    // <label for> or a wrapping <label>: how ordinary forms name their fields.
+    const labels = (el as HTMLInputElement).labels;
+    if (labels && labels.length > 0) {
+      const t = Array.from(labels).map((l) => l.innerText).join(' ').replace(/\s+/g, ' ').trim();
+      if (t) return t;
+    }
     const ph = el.getAttribute('placeholder');
     if (ph) return ph.trim();
     const title = el.getAttribute('title');
@@ -124,8 +130,11 @@ export function collectSnapshot(interactiveOnly = true, max = 200, locator: Snap
   // recursively. Defensive against null/closed shadow roots and re-visits.
   const seen = new Set<Element>();
   const candidates: Element[] = [];
+  // Gather past `max` so hidden candidates dropped below still leave enough to
+  // fill it, and so a page with more than `max` can be reported as truncated.
+  const cap = Math.max(max * 2, max + 50);
   const collect = (root: Document | DocumentFragment | ShadowRoot): void => {
-    if (candidates.length >= max) return;
+    if (candidates.length >= cap) return;
     let matched: ArrayLike<Element>;
     try {
       matched = root.querySelectorAll(sel);
@@ -133,7 +142,7 @@ export function collectSnapshot(interactiveOnly = true, max = 200, locator: Snap
       matched = [];
     }
     for (let i = 0; i < matched.length; i++) {
-      if (candidates.length >= max) break;
+      if (candidates.length >= cap) break;
       const el = matched[i];
       if (seen.has(el)) continue;
       seen.add(el);
@@ -148,7 +157,7 @@ export function collectSnapshot(interactiveOnly = true, max = 200, locator: Snap
       hosts = [];
     }
     for (let i = 0; i < hosts.length; i++) {
-      if (candidates.length >= max) break;
+      if (candidates.length >= cap) break;
       const sr = (hosts[i] as Element & { shadowRoot?: ShadowRoot | null }).shadowRoot;
       if (sr) collect(sr);
     }
@@ -227,7 +236,8 @@ export function collectSnapshot(interactiveOnly = true, max = 200, locator: Snap
       if (picked.length >= max) break;
       picked.push(read(el));
     }
-    truncated = els.length > picked.length;
+    // At the cap there may be more on the page than were even looked at.
+    truncated = els.length > picked.length || candidates.length >= cap;
   }
 
   // -- phase 2: writes (one attribute per returned node) ----------------------

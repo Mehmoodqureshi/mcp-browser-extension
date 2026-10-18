@@ -22,6 +22,7 @@ export type PageOpName =
   | 'text'
   | 'html'
   | 'click'
+  | 'check'
   | 'type'
   | 'focus'
   | 'point'
@@ -38,6 +39,12 @@ export interface PageOpArgs {
   selector?: string | null;
   text?: string;
   clear?: boolean;
+  /** type: send keydown/keypress/keyup around each character. */
+  keyEvents?: boolean;
+  /** type: press Enter after the text (submits the field's form like a person would). */
+  pressEnter?: boolean;
+  /** check: the state a checkbox/radio should end up in. */
+  checked?: boolean;
   outer?: boolean;
   values?: string[];
   x?: number | null;
@@ -235,6 +242,18 @@ export function pageOp(a: PageOpArgs): unknown {
         return { found: true };
       }
 
+      case 'check': {
+        if (!el) return { found: false };
+        // Click only when the state differs: a click toggles, so clicking an
+        // already-checked box to "check" it would clear it.
+        const box = el as HTMLInputElement;
+        if (box.checked !== (a.checked !== false)) {
+          el.scrollIntoView({ block: 'center' });
+          el.click();
+        }
+        return { found: true, checked: box.checked };
+      }
+
       case 'type': {
         if (!el) return { found: false };
         // Rich editors (every social composer) are contenteditable, not inputs.
@@ -248,9 +267,28 @@ export function pageOp(a: PageOpArgs): unknown {
         const node = el as HTMLInputElement | HTMLTextAreaElement | null;
         if (!node) return { found: false };
         node.focus();
-        const next = (a.clear ? '' : node.value ?? '') + (a.text ?? '');
-        setValue(node, next);
+        if (a.keyEvents) {
+          // One character at a time, each inside its own key events, for pages
+          // that react to keystrokes rather than to the value.
+          if (a.clear) setValue(node, '');
+          for (const ch of a.text ?? '') {
+            const ev = { key: ch, bubbles: true, cancelable: true };
+            const go = node.dispatchEvent(new KeyboardEvent('keydown', ev));
+            if (go && node.dispatchEvent(new KeyboardEvent('keypress', ev))) setValue(node, (node.value ?? '') + ch);
+            node.dispatchEvent(new KeyboardEvent('keyup', ev));
+          }
+        } else {
+          setValue(node, (a.clear ? '' : node.value ?? '') + (a.text ?? ''));
+        }
         node.dispatchEvent(new Event('change', { bubbles: true }));
+        if (a.pressEnter) {
+          const ev = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+          const go = node.dispatchEvent(new KeyboardEvent('keydown', ev)) && node.dispatchEvent(new KeyboardEvent('keypress', ev));
+          node.dispatchEvent(new KeyboardEvent('keyup', ev));
+          // Synthetic key events never trigger implicit submission; do what the
+          // browser would for Enter in a single-line field of a form.
+          if (go && node instanceof HTMLInputElement && node.form) node.form.requestSubmit();
+        }
         return { found: true };
       }
 

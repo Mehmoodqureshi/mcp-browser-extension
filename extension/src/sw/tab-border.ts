@@ -71,21 +71,40 @@ async function tabAllowed(tabId: number, policy: WirePolicy | null): Promise<boo
   return !!tab?.url && evaluatePolicy(tab.url, 'get_text', policy).ok;
 }
 
-/** Read the theme and inject the border. Returns the CSS, or '' if the page
- *  cannot be injected yet (still loading, or a chrome:// page). */
-async function paint(tabId: number): Promise<string> {
+/** Longest the border waits on a page. Chrome holds script and CSS injection
+ *  while a page is frozen or showing alert()/confirm(), and every tab shares one
+ *  border lock, so an unbounded wait on one stuck page would stall screenshots
+ *  in all of them. The border is cosmetic: past this, carry on without it. */
+const PAGE_WAIT_MS = 2_000;
+
+/** `work`, or `fallback` if it has not settled in PAGE_WAIT_MS or it fails. */
+async function bounded<T>(work: Promise<T>, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), PAGE_WAIT_MS);
+  });
   try {
-    const [res] = await chrome.scripting.executeScript({ target: { tabId }, func: readPageTheme });
-    const css = borderCss(pickBorderColor((res?.result as PageTheme | undefined) ?? { themeColor: '', background: '', prefersDark: false }));
-    await chrome.scripting.insertCSS({ target: { tabId }, css, origin: 'USER' });
-    return css;
-  } catch {
-    return '';
+    return await Promise.race([work.catch(() => fallback), late]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
+/** Read the theme and inject the border. Returns the CSS, or '' if the page
+ *  cannot be injected yet (still loading, a chrome:// page, or not answering). */
+async function paint(tabId: number): Promise<string> {
+  const theme = await bounded(
+    chrome.scripting.executeScript({ target: { tabId }, func: readPageTheme }).then(([res]) => res?.result as PageTheme | undefined),
+    null,
+  );
+  if (theme === null) return '';
+  const css = borderCss(pickBorderColor(theme ?? { themeColor: '', background: '', prefersDark: false }));
+  const ok = await bounded(chrome.scripting.insertCSS({ target: { tabId }, css, origin: 'USER' }).then(() => true), false);
+  return ok ? css : '';
+}
+
 async function unpaint(tabId: number, css: string): Promise<void> {
-  if (css) await chrome.scripting.removeCSS({ target: { tabId }, css, origin: 'USER' }).catch(() => undefined);
+  if (css) await bounded(chrome.scripting.removeCSS({ target: { tabId }, css, origin: 'USER' }), undefined);
 }
 
 export class TabBorder {
@@ -168,7 +187,7 @@ export class TabBorder {
         this.capturing.delete(tabId);
         // Only restore if nothing cleared or repainted the tab meanwhile.
         if ((await loadMarked())[tabId] !== css) return;
-        await chrome.scripting.insertCSS({ target: { tabId }, css, origin: 'USER' }).catch(() => undefined);
+        await bounded(chrome.scripting.insertCSS({ target: { tabId }, css, origin: 'USER' }), undefined);
       });
     }
   }

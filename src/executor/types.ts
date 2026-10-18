@@ -350,6 +350,8 @@ export interface Executor {
    * older than the op) — the caller then falls back to `fill`/`click` per field.
    */
   fillFields?(fields: FillFieldOp[], opts?: { tabId?: TabId } & FrameOpts): Promise<{ filled: number } | null>;
+  /** Put a checkbox/radio into `checked` (no-op when it already is). */
+  setChecked?(t: Target, checked: boolean, opts?: { tabId?: TabId } & FrameOpts): Promise<ActionOk>;
   /** Every frame of a tab that the extension can inject into, with its URL. */
   framesList?(opts?: { tabId?: TabId }): Promise<FrameInfo[]>;
   /** Read (and configure) the in-page console / network / dialog observers. */

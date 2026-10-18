@@ -11,8 +11,8 @@
  * `Error` as an `isError` result.
  */
 
-import { existsSync, renameSync } from 'node:fs';
-import { resolve as pathResolve, sep } from 'node:path';
+import { existsSync, realpathSync, renameSync } from 'node:fs';
+import { basename, dirname, join, resolve as pathResolve, sep } from 'node:path';
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -143,7 +143,7 @@ const waitUntilField = z.enum(['load', 'domcontentloaded', 'networkidle']).descr
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'tabs_list', description: 'List open browser tabs.', inputSchema: {} },
-  { name: 'tab_select', description: 'Make a tab active by tabId.', inputSchema: { tabId: z.string() } },
+  { name: 'tab_select', description: "Make a tab the agent's tab by tabId, in the background: calls without tabId go to it and the user stays on their own tab. Pass show:true only to bring it to the front for the user.", inputSchema: { tabId: z.string(), show: z.boolean().optional() } },
   { name: 'tab_new', description: "Open a NEW tab (optionally at a URL) in the background, leaving the user's tab alone; it becomes the agent's tab, where calls without tabId go. Pass active:true to show it to the user.", inputSchema: { url: z.string().optional(), active: z.boolean().optional() } },
   { name: 'tab_close', description: 'Close a tab by tabId.', inputSchema: { tabId: z.string() } },
 
@@ -833,14 +833,25 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
 
   tab_select: async (a, ctx) => {
     await gate(ctx, 'tab_select');
-    const tab = await ctx.ex.tabSelect(requireString(a, 'tabId'));
+    const id = requireString(a, 'tabId');
+    // Showing the tab pulls the person off whatever they are doing, so only on request.
+    if (optionalBoolean(a, 'show') === true) {
+      const tab = await ctx.ex.tabSelect(id);
+      workTab = tab.tabId; // an explicit pick: later calls follow it
+      return jsonResult(tab);
+    }
+    const tab = (await ctx.ex.tabsList()).find((t) => t.tabId === id);
+    if (!tab) throw new McpToolError(`no open tab with tabId ${id}; call tabs_list for the current ids`);
     workTab = tab.tabId; // an explicit pick: later calls follow it
-    return jsonResult(tab);
+    return jsonResult({ ...tab, shown: false });
   },
   tab_new: async (a, ctx) => {
     await gate(ctx, 'tab_new');
+    // Opening a tab at a URL loads it like navigate does, so gate it the same way.
+    const url = optionalString(a, 'url');
+    if (url !== undefined) await gate(ctx, 'navigate', { url });
     // Background unless asked: focusing it would pull the person off their tab.
-    const tab = await ctx.ex.tabNew(optionalString(a, 'url'), { active: optionalBoolean(a, 'active') ?? false });
+    const tab = await ctx.ex.tabNew(url, { active: optionalBoolean(a, 'active') ?? false });
     workTab = tab.tabId;
     return jsonResult(tab);
   },
@@ -1074,7 +1085,10 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   },
   get_cookies: async (a, ctx) => {
     await gate(ctx, 'get_text', { tabId: tabId(a) }); // reads tab-scoped secrets; same domain gate as content reads
-    return jsonResult(await ctx.ex.getCookies({ tabId: tabId(a), url: optionalString(a, 'url') }));
+    // Cookies for another URL are that site's secrets: it must be allowed too.
+    const url = optionalString(a, 'url');
+    if (url !== undefined) await gate(ctx, 'get_text', { url });
+    return jsonResult(await ctx.ex.getCookies({ tabId: tabId(a), url }));
   },
   storage: async (a, ctx) => {
     const op = requireString(a, 'op') as 'get' | 'set' | 'remove' | 'clear';
@@ -1182,10 +1196,13 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     return jsonResult(res);
   },
   download_file: async (a, ctx) => {
-    await gate(ctx, 'download_file');
     const url = optionalString(a, 'url');
     const target = optionalTarget(a);
     if (!url && !target) throw new McpToolError('provide "url" or a target (selector|ref)');
+    // By URL, the bytes come from that URL with the person's cookies: gate the
+    // URL, not whichever tab the agent is on. By element, gate the tab it is in
+    // (the extension then gates where the link leads).
+    await gate(ctx, 'download_file', url ? { url } : { tabId: tabId(a) });
     return jsonResult(
       await ctx.ex.download({ url, target, tabId: tabId(a), suggestedName: optionalString(a, 'suggestedName') }),
     );
@@ -1202,9 +1219,19 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     if (!ctx.policy.uploadsDir) {
       throw new McpToolError('upload denied: uploads require an --uploads-dir to be configured (refusing unrestricted local-file access)');
     }
-    const dir = pathResolve(ctx.policy.uploadsDir);
+    // Compare real paths: Chrome reads a symlink's target, so a link inside the
+    // dir pointing outside it must be judged by where it points.
+    const real = (p: string): string => {
+      try {
+        return realpathSync(p);
+      } catch {
+        // Not there (yet): resolve its folder, so /tmp vs /private/tmp still compare.
+        return p === dirname(p) ? p : join(real(dirname(p)), basename(p));
+      }
+    };
+    const dir = real(pathResolve(ctx.policy.uploadsDir));
     for (const f of files) {
-      const abs = pathResolve(f);
+      const abs = real(pathResolve(f));
       if (abs !== dir && !abs.startsWith(dir + sep)) {
         throw new McpToolError(`upload denied: "${f}" is outside the allowed uploads dir (${dir})`);
       }

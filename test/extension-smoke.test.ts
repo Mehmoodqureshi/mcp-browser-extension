@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { chromium, type BrowserContext } from 'playwright';
 
 import { BridgeServer } from '../src/bridge/server';
+import { DENY_ALL_WIRE_POLICY } from '../shared/policy';
 
 const RUN = !!process.env.RUN_EXT_SMOKE;
 const MARKER = 'HELLO-CMCP-4242';
@@ -43,7 +44,9 @@ async function waitFor(predicate: () => boolean, ms: number, label: string): Pro
 
 test('extension pairs and round-trips navigate → get_text', { skip: !RUN }, async () => {
   const token = 'smoke-token-xyz';
-  const bridge = new BridgeServer({ token, serverVersion: 'smoke', port: 0, heartbeatMs: 0 });
+  // The extension mirrors the server's policy and refuses everything without one.
+  const policy = { ...DENY_ALL_WIRE_POLICY, allowDomains: ['127.0.0.1'], enableMutations: true };
+  const bridge = new BridgeServer({ token, serverVersion: 'smoke', port: 0, heartbeatMs: 0, policy });
   const port = await bridge.start();
   const page = await startPage();
 
