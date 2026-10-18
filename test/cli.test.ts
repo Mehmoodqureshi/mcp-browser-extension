@@ -293,7 +293,7 @@ test('the extension subcommand is dispatched before flag parsing', async (t) => 
 // Server modes (as a peer of an in-process hub)
 // ---------------------------------------------------------------------------
 
-test('--print-pairing joins the running hub as a peer, prints the handshake path, and exits on Ctrl-C', async (t) => {
+test('--print-pairing joins the running hub as a peer, prints the handshake path, and exits on Ctrl-C', { skip: process.platform === 'win32' ? 'POSIX-only: Windows cannot deliver SIGINT/SIGTERM to a child, it terminates it' : false }, async (t) => {
   const port = await hub(t);
   const s = sandbox({ MCP_BROWSER_EXTENSION_TOKEN: TOKEN });
   const p = start(t, [...SERVER_FLAGS, '--port', String(port), '--print-pairing'], s.env);
@@ -346,7 +346,7 @@ test('stdio mode: answers initialize with the server identity, then exits cleanl
   for (const l of p.stdout().trim().split('\n')) JSON.parse(l); // stdout carried JSON-RPC only
 });
 
-test('stdio mode: --no-email-verification warns and advertises the local-bypass instructions; SIGTERM exits', async (t) => {
+test('stdio mode: --no-email-verification warns and advertises the local-bypass instructions; SIGTERM exits', { skip: process.platform === 'win32' ? 'POSIX-only: Windows cannot deliver SIGINT/SIGTERM to a child, it terminates it' : false }, async (t) => {
   const port = await hub(t);
   const s = sandbox({ MCP_BROWSER_EXTENSION_TOKEN: TOKEN });
   const p = start(t, [...SERVER_FLAGS, '--port', String(port), '--no-email-verification', '--log-level', 'debug'], s.env);
@@ -362,7 +362,7 @@ test('stdio mode: --no-email-verification warns and advertises the local-bypass 
   assert.equal(code, 0);
 });
 
-test('--http serves MCP on loopback, prints the connector URL with the key, and rejects keyless requests', async (t) => {
+test('--http serves MCP on loopback, prints the connector URL with the key, and rejects keyless requests', { skip: process.platform === 'win32' ? 'POSIX-only: Windows cannot deliver SIGINT/SIGTERM to a child, it terminates it' : false }, async (t) => {
   const port = await hub(t);
   const httpPort = await freePort();
   const s = sandbox({ MCP_BROWSER_EXTENSION_TOKEN: TOKEN });

@@ -104,8 +104,17 @@ test('a missing cloudflared fails at once with the install hint, without retryin
   assert.ok(Date.now() - started < 2_000);
 });
 
+/** Node 20.11+ takes { apis }; Node 18 and early 20 take the bare list. */
+function enableFakeTimeouts(t: TestContext): void {
+  try {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+  } catch {
+    (t.mock.timers.enable as unknown as (apis: string[]) => void)(['setTimeout']);
+  }
+}
+
 function mockTimersRetrying(t: TestContext, logs: string[]): (m: string) => void {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableFakeTimeouts(t);
   return (m: string) => {
     logs.push(m);
     const attempt = Number(/tunnel attempt (\d+) failed/.exec(m)?.[1]);
@@ -158,7 +167,7 @@ test('no URL within the start timeout kills cloudflared and the attempt fails', 
       `process.stderr.write('INF still connecting\\n');\n` +
       `setInterval(() => {}, 1000);\n`,
   );
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  enableFakeTimeouts(t);
   const readyCount = (): number => require('node:fs').readdirSync(dir).filter((f: string) => f.startsWith('ready-')).length;
   const logs: string[] = [];
   let attempts = 0;
