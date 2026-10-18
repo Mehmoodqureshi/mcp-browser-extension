@@ -19,6 +19,8 @@ import { type GcOptions, gcTasks, listTasks } from './bridge/tasks';
 import { configureManager } from './executor/manager';
 import { createSelector } from './executor/select';
 import { BridgeServer } from './bridge/server';
+import { toWirePolicy } from './security/policy';
+import { claimHost, supersededBy } from './bridge/host-claim';
 import { ensureDataDir, ensureWorkspace, handshakePath as handshakeFile, migrateLegacyLayout } from './bridge/datadir';
 import { peekActiveWorkspace, setActiveWorkspace } from './bridge/workspace';
 import { bundledPairingHeldByOther, removeHandshake, resolveToken, writeHandshake, writeBundledPairing } from './bridge/auth';
@@ -279,14 +281,10 @@ async function main(): Promise<void> {
   const dataDir = ensureDataDir(cfg.dataDir);
   const token = resolveToken(dataDir, { persist: cfg.persistToken });
 
-  const { allowDomains, allowEval, allowDownloads, allowUploads, allowAllTabs, enableMutations } = cfg.policy;
   const bridge = new BridgeServer({
     token,
     serverVersion: version(),
-    // Wire-serializable policy subset (no local uploadsDir) so the extension mirrors the gate.
-    // `allowDomains` is passed BY REFERENCE: sites allowed from the extension's
-    // Options are spliced into this same array, which the tool gate reads too.
-    policy: { allowDomains, allowEval, allowDownloads, allowUploads, allowAllTabs, enableMutations },
+    policy: toWirePolicy(cfg.policy),
     siteGrants: !cfg.noSiteGrants,
     latestExtensionVersion: bundledExtensionVersion(),
     port: cfg.wsPort,
@@ -467,8 +465,21 @@ async function main(): Promise<void> {
   // holding the port, and its usage is never reported. Notice instead when the
   // parent is gone, or when writing to it fails.
   const parentPid = process.ppid;
+  // A host that "reconnects" by spawning a new child may leave us running with
+  // our old flags; the newest server from the same parent claims the slot.
+  const hostProfile = cfg.profile ?? 'default';
+  try {
+    claimHost(dataDir, parentPid, hostProfile);
+  } catch (err) {
+    logDebug(`host claim skipped: ${(err as Error).message}`);
+  }
   const watchdog = setInterval(() => {
     if (process.ppid !== parentPid) return shutdown(); // reparented: the parent exited
+    const newer = supersededBy(dataDir, parentPid, hostProfile);
+    if (newer !== null) {
+      logErr(`replaced by a newer server (pid ${newer}) from the same MCP host; exiting`);
+      return shutdown();
+    }
     try {
       process.kill(parentPid, 0);
     } catch (err) {

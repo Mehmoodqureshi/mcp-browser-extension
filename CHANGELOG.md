@@ -1,3 +1,23 @@
+## 0.9.29 - 2026-10-18
+
+Console and network debugging work with a real browser, plus page checkpoints.
+
+- fix: `--enable-observers` now reaches the extension. Earlier versions unlocked
+  `console_logs`, `network_log` and `dialogs` on the server but never told the
+  extension, so every call against Chrome was refused with POLICY_DENIED.
+- fix: a failed image, script or stylesheet load is recorded as
+  `Failed to load img: <url>` at level `error`, instead of an `exception`
+  entry reading "undefined".
+- fix: a server replaced by its MCP host (for example `/mcp` Reconnect in
+  Claude Code, which leaves the old process running) now exits within a few
+  seconds, so the new server and its flags take over the browser connection.
+- feat: `page_watch` saves a named accessibility checkpoint of a page and later
+  reports added, removed and changed controls. Checkpoints stay under the active
+  profile, never store form values, and strip URL query strings.
+- docs: uncaught errors are recorded at level `exception`; the README example
+  now asks for that level.
+- extension: 0.9.29 (observer hook change); a new Store ZIP is required.
+
 ## 0.9.28 - 2026-10-17
 
 Run trusted local browser automation without an email prompt.

@@ -141,6 +141,14 @@ declare global {
       'error',
       (e: ErrorEvent) => {
         try {
+          // Capture phase also sees failed <img>/<script>/<link> loads: a plain
+          // Event on the element, with no message. Report what failed to load.
+          const el = e.target as (Element & { currentSrc?: string; src?: string; href?: string }) | null;
+          if (el && el !== (window as unknown) && typeof el.tagName === 'string') {
+            const src = el.currentSrc || el.src || el.href || '';
+            record('error', `Failed to load ${el.tagName.toLowerCase()}${src ? `: ${src}` : ''}`);
+            return;
+          }
           const err = e.error as Error | undefined;
           const where = e.filename ? ` (${e.filename}:${e.lineno}:${e.colno})` : '';
           record('exception', `${e.message}${where}`, { stack: err?.stack });

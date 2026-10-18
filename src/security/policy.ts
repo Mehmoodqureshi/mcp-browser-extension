@@ -86,6 +86,17 @@ export function resolvePolicy(partial?: Partial<Policy>): Policy {
   };
 }
 
+/**
+ * The wire-serializable subset delivered to the extension in `welcome`, so it
+ * mirrors the server gate. `uploadsDir` (a local path) stays server-side.
+ * `allowDomains` is passed BY REFERENCE: sites allowed from the extension's
+ * Options are spliced into this same array, which the tool gate reads too.
+ */
+export function toWirePolicy(policy: Policy): WirePolicy {
+  const { allowDomains, allowEval, allowDownloads, allowUploads, allowAllTabs, enableMutations, allowObservers } = policy;
+  return { allowDomains, allowEval, allowDownloads, allowUploads, allowAllTabs, enableMutations, allowObservers };
+}
+
 // ---------------------------------------------------------------------------
 // The gate
 // ---------------------------------------------------------------------------

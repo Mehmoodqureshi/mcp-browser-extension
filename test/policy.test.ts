@@ -16,6 +16,7 @@ import {
   isDomainAllowed,
   isMutatingMethod,
   hostOf,
+  toWirePolicy,
   type Policy,
 } from '../src/security/policy';
 import { ExecutorError } from '../src/executor/types';
@@ -358,6 +359,15 @@ test('parseArgs: safe defaults and flag overrides', () => {
   assert.equal(pinned.persistToken, true);
 
   assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+});
+
+test('toWirePolicy carries allowObservers to the extension and keeps uploadsDir local', () => {
+  const policy = resolvePolicy({ allowDomains: ['example.com'], allowObservers: true, uploadsDir: '/tmp/up' });
+  const wire = toWirePolicy(policy);
+  assert.equal(wire.allowObservers, true);
+  assert.equal(wire.allowDomains, policy.allowDomains, 'allowDomains must stay the same array');
+  assert.equal('uploadsDir' in wire, false);
+  assert.equal(toWirePolicy(resolvePolicy()).allowObservers, false);
 });
 
 void DEFAULT_POLICY; // referenced to keep the import meaningful across refactors

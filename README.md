@@ -6,7 +6,7 @@
 
 **Website and docs:** [mcp-browser-extension.com](https://mcp-browser-extension.com) ·
 [Quickstart](https://mcp-browser-extension.com/docs/quickstart) ·
-[All 42 tools](https://mcp-browser-extension.com/docs/tools) ·
+[All 43 tools](https://mcp-browser-extension.com/docs/tools) ·
 [Install the extension from the Chrome Web Store](https://chromewebstore.google.com/detail/mcp-browser-extension/jelfhdlkhbfmlpbghoeaepijllcnplgh)
 
 **Let Claude use the Chrome you are already logged into.** Not a fresh
@@ -447,7 +447,7 @@ Reading the DOM tells you what a page looks like after it failed, not why. With
 and `fetch`/`XMLHttpRequest` traffic, and intercepts native dialogs:
 
 ```jsonc
-console_logs { "level": "error" }        // the exception the page swallowed
+console_logs { "level": "exception" }    // the uncaught error behind a broken page
 network_log  { "failedOnly": true }      // the 500 behind the blank screen
 dialogs      { "policy": "accept" }      // answer confirm() with true from here on
 ```
@@ -486,6 +486,24 @@ Nodes are matched across snapshots by role + accessible name, not by `ref` —
 refs renumber in document order on every snapshot, so diffing on them would
 report an unchanged button as removed-and-re-added the moment anything above it
 appears.
+
+### Remember a page and catch changes later — `page_watch`
+
+Save a named accessibility checkpoint, then compare the current page against it
+in a later session. Checkpoints live under the active Chrome profile, so work
+and personal browser identities stay separate:
+
+```jsonc
+page_watch { "action": "create", "name": "Vendor pricing" }
+page_watch { "action": "compare", "watchId": "watch_…" }
+page_watch { "action": "list" }
+page_watch { "action": "delete", "watchId": "watch_…" }
+```
+
+The result shows added, removed and changed controls. It stores accessibility
+labels and control state, strips URL query strings, applies configured redaction,
+and never saves live form values. Creating or comparing a checkpoint still
+requires the page's domain to be allowed.
 
 ### Targeting by role and name
 

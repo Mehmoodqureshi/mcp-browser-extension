@@ -38,6 +38,7 @@ import { extractLinks, fillForm, readAsMarkdown } from './helpers';
 import { compileRedactionPattern, NO_REDACTION, redactHtml, redactText, type RedactionConfig } from './redact';
 import { resolveLocator, hasLocator, type Locator } from './locate';
 import { diffSnapshots, lastSnapshot, rememberSnapshot, resetSnapshots, scopeOf } from './snapdiff';
+import { compareWatch, createWatch, listWatches, readWatch, removeWatch, safeSnapshot } from './page-watch';
 import { describeAuthWall, detectAuthWall, type AuthWall } from '../../shared/auth-wall';
 import { noteBytes, noteGate, noteRedactions, withAudit, type CallAudit } from './audit';
 import { logDebug, logErr } from './log';
@@ -163,6 +164,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'get_text', description: 'Get visible text of the page or an element.', inputSchema: { ...TARGET_PROPS, ...FRAME_PROPS, tabId: tabIdField, maxBytes: maxBytesField } },
   { name: 'get_html', description: 'Get HTML of the page or an element. Output is capped (see maxBytes) and cut at a tag boundary; narrow it with `selector` rather than raising the cap when you can. Password field values are always blanked.', inputSchema: { ...TARGET_PROPS, ...FRAME_PROPS, outer: z.boolean().optional(), tabId: tabIdField, maxBytes: maxBytesField } },
   { name: 'snapshot', description: 'Accessibility snapshot: interactive elements with refs to target by `ref` (more reliable than guessing CSS selectors). Pass diff:true to get only what changed since the last snapshot of this tab - far cheaper in a click/read loop. Password fields appear as secret:true with no value.', inputSchema: { interactiveOnly: z.boolean().optional(), max: z.number().optional(), diff: z.boolean().describe('Return added/removed/changed elements since the previous snapshot of this tab instead of the whole tree').optional(), failOnAuthWall: authWallField, ...FRAME_PROPS, tabId: tabIdField } },
+  { name: 'page_watch', description: 'Save a local page checkpoint and compare it later. Actions: create (name), compare (watchId), list, delete. Stores accessibility labels and state, never form values. Site allowlist still applies.', inputSchema: { action: z.enum(['create', 'compare', 'list', 'delete']), name: z.string().optional(), watchId: z.string().optional(), tabId: tabIdField } },
   { name: 'get_cookies', description: "Read cookies visible to the tab's URL (or a given url).", inputSchema: { url: z.string().optional(), tabId: tabIdField } },
   { name: 'storage', description: 'Read/write localStorage (or sessionStorage). op: get|set|remove|clear.', inputSchema: { op: z.enum(['get', 'set', 'remove', 'clear']), key: z.string().optional(), value: z.string().optional(), session: z.boolean().optional(), tabId: tabIdField } },
   { name: 'eval', description: 'Evaluate JavaScript in the page (disabled in safe-mode).', inputSchema: { expression: z.string(), awaitPromise: z.boolean().optional(), ...FRAME_PROPS, tabId: tabIdField } },
@@ -366,6 +368,7 @@ const TOOL_GATE: Readonly<Record<string, WireMethod | null>> = {
   get_text: 'get_text',
   get_html: 'get_html',
   snapshot: 'get_text',
+  page_watch: 'get_text',
   get_cookies: 'get_text',
   extract_links: 'get_text',
   read_as_markdown: 'get_text',
@@ -1044,6 +1047,31 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
         : {}),
     });
   },
+  page_watch: async (a, ctx) => {
+    const action = requireString(a, 'action');
+    const ws = getActiveWorkspace();
+    if (action === 'list') return jsonResult({ watches: listWatches(ws.profileDir) });
+    if (action === 'delete') {
+      removeWatch(ws.profileDir, requireString(a, 'watchId'));
+      return jsonResult({ deleted: true });
+    }
+    await gate(ctx, 'get_text', { tabId: tabId(a) });
+    const snap = await ctx.ex.snapshot({ tabId: tabId(a), ...frameOpts(a), max: 500 });
+    const clean = safeSnapshot(snap, (s) => redactText(s, redaction(ctx.policy)).value);
+    if (action === 'create') {
+      const name = requireWithinLength(requireString(a, 'name'), 'name', 80);
+      const saved = createWatch(ws.profileDir, name, clean);
+      return jsonResult({ watchId: saved.id, name: saved.name, url: saved.url, title: clean.title, elements: clean.nodes.length, savedAt: new Date(saved.ts).toISOString(), note: 'Checkpoint saved locally for this Chrome profile. Form values are not stored.' });
+    }
+    if (action === 'compare') {
+      const previous = readWatch(ws.profileDir, requireString(a, 'watchId'));
+      // The site's grant may have been revoked since the checkpoint was saved.
+      assertUrlAllowed(previous.url, 'get_text', ctx.policy);
+      const diff = compareWatch(previous, clean, (s) => redactText(s, redaction(ctx.policy)).value);
+      return jsonResult({ watchId: previous.id, name: previous.name, previousUrl: previous.url, currentUrl: clean.url, previousAt: new Date(previous.ts).toISOString(), checkedAt: new Date().toISOString(), ...diff });
+    }
+    throw new McpToolError(`unknown page_watch action: ${action}`);
+  },
   get_cookies: async (a, ctx) => {
     await gate(ctx, 'get_text', { tabId: tabId(a) }); // reads tab-scoped secrets; same domain gate as content reads
     return jsonResult(await ctx.ex.getCookies({ tabId: tabId(a), url: optionalString(a, 'url') }));
@@ -1524,7 +1552,11 @@ async function dispatchInner(
     const mgr = getManager();
     // Workspace-management tools run server-side and must work even with no
     // browser paired, so they skip the executor readiness check.
-    const ex = NO_BACKEND_TOOLS.has(name) ? (null as unknown as Executor) : await mgr.ensureReady();
+    const args = asArgs(rawArgs);
+    const workspaceOnlyWatchAction = name === 'page_watch' && (args.action === 'list' || args.action === 'delete');
+    const ex = NO_BACKEND_TOOLS.has(name) || workspaceOnlyWatchAction
+      ? (null as unknown as Executor)
+      : await mgr.ensureReady();
     let result: CallToolResult;
     try {
       result = await handler(asArgs(rawArgs), { ex, policy: mgr.policy });
