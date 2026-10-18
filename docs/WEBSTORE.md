@@ -17,20 +17,24 @@ must be higher than the last one uploaded. It comes from
 
 ## 2. Store listing
 
-**Name (45 chars max):** MCP Browser Extension
+**Name (75 chars max):** MCP Browser Extension – AI agent in your logged-in Chrome
 
 > Matches the manifest `name`. Google's branding rules allow "for Chrome" as a
 > trailing qualifier; what they refuse is a name that leads with the trademark,
 > so keep the word order exactly as above.
 
 **Summary (132 chars max):**
-Connect your signed-in Chrome to MCP clients through a local server. Optional remote tunnels and profile proxies. Deny-all by default.
+Lets your AI agent use the Chrome you are signed into, through a local MCP server. Deny-all by default.
+
+> Comes from the manifest `description`. Never list AI client names (Claude,
+> Cursor, Codex...) here or in the description: 0.9.29 was rejected for
+> "excessive keywords" on 2026-10-18.
 
 **Description:**
 MCP Browser Extension is an open-source MCP server and extension (MIT) that lets an AI agent on your own computer use the Chrome you already have open: your sessions, your cookies, your logins, with no separate automated browser.
 
 How it works
-- You start the MCP Browser Extension server (npm package mcp-browser-extension) from your MCP client (Claude Code, Claude Desktop, Cursor, Windsurf, or any other MCP host).
+- You start the MCP Browser Extension server (npm package mcp-browser-extension) from your MCP client.
 - On first use, enter your email in the client's prompt and open the sign-in link. The server reports verification and continues the waiting browser action.
 - This extension connects to that server on 127.0.0.1 and carries out its commands: tabs, navigation, clicks, typing, page reads, screenshots, downloads.
 - The extension sends browser results to your local server, which forwards them to your configured MCP client. An optional tunnel allows remote clients to connect using a private access key. Optional proxy IP checks contact ipinfo.io or api.ipify.org.
@@ -62,8 +66,8 @@ Source, docs, and issues: https://github.com/Mehmoodqureshi/mcp-browser-extensio
 - Small promo tile 440x280 (required).
 - Marquee promo tile 1400x560 (optional). Use the current product name and
   `mcp-browser-extension` command in both promotional images.
-- Promo video: https://www.youtube.com/watch?v=1Jx6TsKKF-I
-  (the owner's published form-filling demonstration, with embedding available).
+- Promo video: https://www.youtube.com/watch?v=Y_uLgIZwzi8
+  ("MCP Browser Extension: 2 real workflows", public, embedding available).
 
 ## 4. Privacy tab
 
