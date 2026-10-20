@@ -52,6 +52,10 @@ export interface Policy extends WirePolicy {
    *  `AUTH_REQUIRED` when the page it lands on is a high-confidence sign-in
    *  wall, so an expired session is never scored as some other failure. */
   failOnAuthWall?: boolean;
+  /** `--enable-cookie-values`: `get_cookies` returns each cookie's value. Off by
+   *  default, because a session cookie is the login itself: whoever holds it can
+   *  use the account from anywhere, with no password and no browser. */
+  allowCookieValues?: boolean;
 }
 
 /** The SAFE default: deny everything until the user opts in. */
@@ -67,6 +71,7 @@ export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
   redact: false,
   redactPatterns: [],
   failOnAuthWall: false,
+  allowCookieValues: false,
 });
 
 /** Merge a partial (from a policy file and/or CLI flags) over the safe default. */
@@ -83,6 +88,7 @@ export function resolvePolicy(partial?: Partial<Policy>): Policy {
     redact: partial?.redact ?? DEFAULT_POLICY.redact,
     redactPatterns: partial?.redactPatterns ?? [...(DEFAULT_POLICY.redactPatterns ?? [])],
     failOnAuthWall: partial?.failOnAuthWall ?? DEFAULT_POLICY.failOnAuthWall,
+    allowCookieValues: partial?.allowCookieValues ?? DEFAULT_POLICY.allowCookieValues,
   };
 }
 

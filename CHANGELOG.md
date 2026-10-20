@@ -1,3 +1,26 @@
+## Unreleased
+
+- fix: screenshots at non-default Chrome page zoom no longer crop the page or
+  return the wrong image size. Viewport, full-page and element captures now
+  account for zoom, including scrolled pages and Retina displays, without
+  changing the tab's zoom setting.
+- fix: a screenshot taken while a page was still loading or sending you on (a
+  sign-in redirect, a site that replaces its first page right after load) came
+  back half the old page and half the new one, sometimes with the tab border
+  in it. Screenshots now wait for the page to finish loading, and retake once
+  after it settles if it moved during the capture. The border is no longer
+  painted onto a page that loads mid-capture, and the landing URL is checked
+  against the allowlist again before it is captured.
+- fix: when the debugger capture failed and the visible-tab fallback was used,
+  `scale` was ignored and a Retina display returned a 2x image; the fallback
+  now returns the requested size.
+- security: `get_cookies` hides every cookie value by default and returns
+  `[hidden]` in its place, with names, domain, path and flags unchanged. A
+  session cookie is the login itself: whoever holds its value can use the
+  account from anywhere, with no password. The browser stays signed in without
+  the agent ever seeing it. Pass `--enable-cookie-values` (or set
+  `allowCookieValues` in a policy file) to get the values back.
+
 ## 0.9.30 - 2026-10-19
 
 Screenshots no longer get stuck, the agent stays in the background, and six

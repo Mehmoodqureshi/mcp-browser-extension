@@ -19,6 +19,7 @@ import {
 import { configureManager, resetManagerForTesting } from '../src/executor/manager';
 import { StubExecutor, type StubOptions } from '../src/executor/stub-executor';
 import { resolvePolicy, type Policy } from '../src/security/policy';
+import { parseArgs } from '../src/config';
 
 function configure(policy: Partial<Policy>, stub: StubOptions = {}): void {
   resetManagerForTesting();
@@ -158,4 +159,22 @@ test('get_cookies is a domain-gated read', async () => {
   const ok = await dispatchToolCall('get_cookies', {});
   assert.notEqual(ok.isError, true);
   assert.match(textOf(ok), /"name": "stub"/);
+});
+
+test('get_cookies hides cookie values unless --enable-cookie-values', async () => {
+  configure(OPEN, { activeUrl: 'https://example.com' });
+  const hidden = JSON.parse(textOf(await dispatchToolCall('get_cookies', {})));
+  assert.equal(hidden.cookies[0].name, 'stub');
+  assert.equal(hidden.cookies[0].value, '[hidden]');
+  assert.match(hidden.valuesHidden, /--enable-cookie-values/);
+
+  configure({ ...OPEN, allowCookieValues: true }, { activeUrl: 'https://example.com' });
+  const shown = JSON.parse(textOf(await dispatchToolCall('get_cookies', {})));
+  assert.equal(shown.cookies[0].value, '1');
+  assert.equal(shown.valuesHidden, undefined);
+});
+
+test('--enable-cookie-values is off by default and turned on by the flag', () => {
+  assert.equal(parseArgs([]).policy.allowCookieValues, false);
+  assert.equal(parseArgs(['--enable-cookie-values']).policy.allowCookieValues, true);
 });

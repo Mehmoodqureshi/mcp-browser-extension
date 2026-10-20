@@ -98,6 +98,27 @@ test('a page that stops answering fails fast and leaves the tab usable', { skip,
   await h.call('tab_close', { tabId: tab });
 });
 
+test('a screenshot taken while the page sends you on shows only the page it lands on', { skip }, async () => {
+  // A dark page, still loading, that replaces itself with a white one the way
+  // a sign-in redirect does. Captured mid-switch, the shot came back half dark.
+  const tab = await h.open('/');
+  await h.json('navigate', { tabId: tab, url: `${h.base}/bounce`, waitUntil: 'domcontentloaded' });
+  const shot = await h.call('screenshot', { tabId: tab, format: 'png' });
+  assert.notEqual(shot.isError, true, textOf(shot));
+  const img = shot.content.find((c) => c.type === 'image');
+  assert.ok(img && img.type === 'image', 'the screenshot returns an image');
+  const rows = await h.sw.evaluate(async (b64: string) => {
+    const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+    const c = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d')!;
+    c.drawImage(bmp, 0, 0);
+    // Sample the middle column a quarter and three quarters of the way down.
+    return [0.25, 0.75].map((f) => c.getImageData(Math.floor(bmp.width / 2), Math.floor(bmp.height * f), 1, 1).data[0]);
+  }, img.data);
+  for (const red of rows) assert.ok(red > 200, `every part of the shot is the landed white page (red channel ${rows.join(', ')})`);
+  await h.json('tab_close', { tabId: tab });
+});
+
 test('one frozen tab does not stall screenshots in the other tabs', { skip, timeout: 120_000 }, async () => {
   const frozen = await h.open('/hang');
   const healthy = await h.open('/');

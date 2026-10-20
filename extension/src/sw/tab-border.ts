@@ -153,7 +153,10 @@ export class TabBorder {
         delete marked[tabId];
       } else {
         await unpaint(tabId, marked[tabId]); // same-document loads keep the old CSS
-        marked[tabId] = await paint(tabId);
+        // A page that loads while a screenshot is being taken must not get its
+        // border back mid-capture. Leave it pending: the command's own
+        // used() call paints it once the capture is done.
+        marked[tabId] = this.capturing.has(tabId) ? '' : await paint(tabId);
       }
       await saveMarked(marked);
     });
@@ -171,13 +174,14 @@ export class TabBorder {
   /** Take the border down for a capture (screenshot, PDF) and put it back after. */
   async aroundCapture<T>(tabId: number | null, fn: () => Promise<T>): Promise<T> {
     if (tabId === null) return fn();
+    // Counted even when the tab has no border yet, so a page that loads during
+    // the capture does not paint one into it (see loaded()).
     const css = await this.locked(async () => {
       const c = (await loadMarked())[tabId] ?? '';
-      if (c) this.capturing.set(tabId, (this.capturing.get(tabId) ?? 0) + 1);
+      this.capturing.set(tabId, (this.capturing.get(tabId) ?? 0) + 1);
       await unpaint(tabId, c);
       return c;
     });
-    if (!css) return fn();
     try {
       return await fn();
     } finally {
@@ -186,7 +190,7 @@ export class TabBorder {
         if (left > 0) return void this.capturing.set(tabId, left);
         this.capturing.delete(tabId);
         // Only restore if nothing cleared or repainted the tab meanwhile.
-        if ((await loadMarked())[tabId] !== css) return;
+        if (!css || (await loadMarked())[tabId] !== css) return;
         await bounded(chrome.scripting.insertCSS({ target: { tabId }, css, origin: 'USER' }), undefined);
       });
     }

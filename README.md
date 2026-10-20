@@ -675,6 +675,10 @@ what the flags say.
 it says nothing about what is on them. A logged-in page routinely renders a
 session token into a script tag or an API key onto a settings screen.
 
+- **Cookie values are hidden by default.** `get_cookies` returns each cookie's
+  name, domain, path and flags with the value replaced by `[hidden]`: a session
+  cookie is the login itself, and anyone holding it can use the account without
+  a password. Pass `--enable-cookie-values` if a task really needs them.
 - **Password field values are always suppressed** — in `get_html`, and in
   `snapshot`, where the field still appears (so you can type into it) flagged
   `secret: true` with no value. No flag, no opt-in: nobody wants those characters.

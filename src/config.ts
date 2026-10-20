@@ -221,6 +221,9 @@ export function parseArgs(argv: string[]): CliConfig {
       case '--enable-observers':
         policyFlags.allowObservers = true;
         break;
+      case '--enable-cookie-values':
+        policyFlags.allowCookieValues = true;
+        break;
       case '--redact':
         policyFlags.redact = true;
         break;
@@ -490,6 +493,9 @@ Security (default: deny-all safe mode):
                          in-page hook on allowlisted sites that records console
                          output, fetch/XHR traffic, and intercepts alert/confirm/
                          prompt (off by default: it patches page globals).
+  --enable-cookie-values Let get_cookies return cookie values. Off by default:
+                         a session cookie is the login itself, so get_cookies
+                         returns names and flags with every value hidden.
   --redact               Scrub secret-shaped strings (JWTs, cloud keys, bearer
                          tokens, private keys) out of page reads. Password field
                          values are always suppressed, with or without this.

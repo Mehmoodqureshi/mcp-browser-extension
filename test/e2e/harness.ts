@@ -66,6 +66,8 @@ export const PAGES: Record<string, string> = {
   '/markdown': `<!doctype html><title>Article</title><article><h1>Heading One</h1><p>Paragraph with <strong>bold</strong> text.</p><ul><li>item a</li><li>item b</li></ul></article>`,
   '/watch': `<!doctype html><title>Watch</title><button id="a">Alpha</button><button id="b">Beta</button>
     <button id="mutate" onclick="document.getElementById('b').remove(); const n = document.createElement('button'); n.textContent = 'Gamma'; document.body.append(n);">mutate</button>`,
+  '/bounce': `<!doctype html><title>Bounce</title><body style="margin:0;background:#151515;height:100vh"><iframe src="/slow" style="display:none"></iframe><script>setTimeout(() => location.replace('/bounce-done'), 1000);</script>`,
+  '/bounce-done': `<!doctype html><title>Landed</title><body style="margin:0;background:#fff;height:100vh"><h1>LANDED</h1>`,
   '/hang': `<!doctype html><title>Hang</title><button id="spin" onclick="setTimeout(() => { const end = Date.now() + 30000; while (Date.now() < end) {} }, 0)">spin</button>`,
 };
 
@@ -128,7 +130,10 @@ async function waitFor(predicate: () => boolean, ms: number, label: string): Pro
   }
 }
 
-export async function startHarness(overrides: Partial<Policy> = {}): Promise<Harness> {
+export async function startHarness(
+  overrides: Partial<Policy> = {},
+  browserOptions: { deviceScaleFactor?: number } = {},
+): Promise<Harness> {
   const page: Server = createServer(serve);
   await new Promise<void>((resolve) => page.listen(0, '127.0.0.1', resolve));
   const addr = page.address();
@@ -145,6 +150,7 @@ export async function startHarness(overrides: Partial<Policy> = {}): Promise<Har
     allowDownloads: true,
     allowUploads: true,
     allowObservers: true,
+    allowCookieValues: true,
     uploadsDir,
     ...overrides,
   });
@@ -159,8 +165,14 @@ export async function startHarness(overrides: Partial<Policy> = {}): Promise<Har
   const ctx = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
     headless: !process.env.E2E_HEADED,
+    // A native display scale exercises chrome.debugger captures. Playwright's
+    // deviceScaleFactor emulates only the page, not the browser's compositor.
+    ...(browserOptions.deviceScaleFactor ? { viewport: null } : {}),
     acceptDownloads: true,
-    args: [`--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`, '--no-first-run'],
+    args: [
+      `--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`, '--no-first-run',
+      ...(browserOptions.deviceScaleFactor ? [`--force-device-scale-factor=${browserOptions.deviceScaleFactor}`] : []),
+    ],
   });
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent('serviceworker', { timeout: 15_000 });

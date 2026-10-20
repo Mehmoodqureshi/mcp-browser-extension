@@ -28,6 +28,7 @@ import { OBSERVER_GLOBAL, readObservers } from '../../../shared/observers';
 import {
   DEFAULT_JPEG_QUALITY,
   DEFAULT_SCREENSHOT_FORMAT,
+  DEFAULT_SCREENSHOT_SCALE,
   planScreenshot,
   type ElementRect,
   type PageDims,
@@ -619,7 +620,7 @@ async function measurePage(
       ? await execOp(tabId, { op: 'measure', selector: null })
       : found;
   return {
-    dims: top.dims as PageDims,
+    dims: { ...(top.dims as PageDims), zoom: await chrome.tabs.getZoom(tabId) },
     element: (found.element ?? null) as ElementRect | null,
     missing: found.missing === true,
   };
@@ -691,6 +692,55 @@ async function screenshotViaDebugger(
   };
 }
 
+/** Longest a screenshot waits for a page that is still loading or switching. */
+const SETTLE_MS = 5_000;
+/** How long the load state and URL must hold still after the page moved under
+ *  a capture. Sites that send you on (a sign-in redirect, a router replacing
+ *  the page) do it a beat after load; capturing then gives half of each page. */
+const SETTLE_QUIET_MS = 400;
+
+/** Wait until the tab has finished loading and its URL and load state have not
+ *  changed for `quietMs`. Bounded: a page that never settles is captured as is. */
+async function waitForSettled(tabId: number, quietMs = 0): Promise<void> {
+  const deadline = Date.now() + SETTLE_MS;
+  let last = '';
+  let since = Date.now();
+  while (Date.now() < deadline) {
+    const t = await chrome.tabs.get(tabId).catch(() => null);
+    if (!t) return;
+    const state = `${t.status}|${t.url}`;
+    if (state !== last) {
+      last = state;
+      since = Date.now();
+    }
+    if (t.status === 'complete' && Date.now() - since >= quietMs) return;
+    await delay(100);
+  }
+}
+
+/** Did the tab start loading, or land somewhere else, since `url`? */
+async function pageMoved(tabId: number, url: string | undefined): Promise<boolean> {
+  const t = await chrome.tabs.get(tabId).catch(() => null);
+  return !!t && (t.status === 'loading' || t.url !== url);
+}
+
+/** Resize a captureVisibleTab image (device pixels) to the requested size. */
+async function scaleShot(dataUrl: string, width: number, height: number, enc: ShotEncoding): Promise<string> {
+  const raw = dataUrl.split(',')[1] ?? '';
+  if (!(width > 0 && height > 0)) return raw;
+  const bitmap = await createImageBitmap(await (await fetch(dataUrl)).blob());
+  if (Math.abs(bitmap.width - width) <= 1) return raw;
+  const canvas = new OffscreenCanvas(width, height);
+  canvas.getContext('2d')?.drawImage(bitmap, 0, 0, width, height);
+  const blob = await canvas.convertToBlob(
+    enc.format === 'jpeg' ? { type: 'image/jpeg', quality: enc.quality / 100 } : { type: 'image/png' },
+  );
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 /** Fallback: captureVisibleTab grabs the ACTIVE visible tab, so activate the
  *  target first. Used only when the debugger can't attach. The window is never
  *  focused and the person's tab is put back straight after the capture, so the
@@ -724,8 +774,13 @@ async function captureActiveTab(tabId: number, windowId: number, fullPage: boole
   );
   const viewportH = dims?.h ?? 0;
   const fullH = dims?.full ?? viewportH;
+  // captureVisibleTab returns device pixels; the debugger path returns CSS px
+  // times `scale`, so match it rather than hand back a 2x image on Retina.
+  const scale = enc.scale ?? DEFAULT_SCREENSHOT_SCALE;
+  const out = Math.round((dims?.w ?? 0) * scale);
+  const outH = Math.round(viewportH * scale);
   return {
-    dataBase64: dataUrl.split(',')[1] ?? '',
+    dataBase64: await scaleShot(dataUrl, out, outH, enc).catch(() => dataUrl.split(',')[1] ?? ''),
     mimeType: enc.format === 'jpeg' ? 'image/jpeg' : 'image/png',
     width: dims?.w ?? 0,
     height: viewportH,
@@ -1283,9 +1338,28 @@ export class ChromeExecutor {
         if (selector && !(await waitForSelector(id, selector, frameIds, READ_WAIT_MS))) {
           throw notFound(selector, await execOp(id, { op: 'waitSelector', selector, timeoutMs: 0 }, frameIds));
         }
-        try {
+        // Never capture a page in the middle of loading or of sending us on:
+        // that is how a shot ends up half the old page and half the new one.
+        await waitForSettled(id);
+        const shoot = async (): Promise<Record<string, unknown>> => {
+          const at = (await chrome.tabs.get(id)).url;
+          // The gate checked the URL the call started on; a redirect since may
+          // have landed somewhere that is not allowed.
+          if (at) this.assertAllowed(at, 'screenshot');
+          const shot = await screenshotViaDebugger(id, fullPage, enc, selector, frameIds).catch(async (err: unknown) => {
+            if (!(await pageMoved(id, at))) throw err;
+            return null; // the page navigated under the capture
+          });
+          if (shot && !(await pageMoved(id, at))) return shot;
+          await waitForSettled(id, SETTLE_QUIET_MS);
+          const now = (await chrome.tabs.get(id)).url;
+          if (now) this.assertAllowed(now, 'screenshot');
           return await screenshotViaDebugger(id, fullPage, enc, selector, frameIds);
+        };
+        try {
+          return await shoot();
         } catch (err) {
+          if (err instanceof CmdError && err.code === 'POLICY_DENIED') throw err;
           // A genuinely missing element is a real failure — don't mask it with a fallback.
           // Nor is a page that stopped answering: the fallback would wait on the
           // same frozen renderer, and flash the person's tab while it did.

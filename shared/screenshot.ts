@@ -15,8 +15,10 @@ export interface PageDims {
   /** Full content box (document) width/height. */
   fullW: number;
   fullH: number;
-  /** window.devicePixelRatio (default 1). Output pixels = CSS px * dpr * clip.scale. */
+  /** window.devicePixelRatio, including page zoom (default 1). */
   dpr?: number;
+  /** Chrome tab zoom: CSS pixels to device-independent pixels (default 1). */
+  zoom?: number;
   /** Current scroll offset of the top document (default 0,0); a viewport clip starts here. */
   scrollX?: number;
   scrollY?: number;
@@ -40,7 +42,7 @@ export interface ElementRect {
   h: number;
 }
 
-/** A CDP `Page.captureScreenshot` clip (CSS px; `scale` multiplies output). */
+/** A CDP `Page.captureScreenshot` clip (device-independent px, not CSS px). */
 export interface CaptureClip {
   x: number;
   y: number;
@@ -77,15 +79,20 @@ export function planScreenshot(
   dims: PageDims,
   opts: { fullPage?: boolean; element?: ElementRect | null; scale?: number } = {},
 ): ScreenshotPlan {
-  // CDP's clip.scale multiplies on top of the device scale factor, so dividing
-  // by the DPR yields exactly `opts.scale` output pixels per CSS pixel.
+  // Page.Viewport uses device-independent pixels, so convert the CSS geometry
+  // by the tab zoom. DPR already includes that zoom: dividing the output scale
+  // by DPR then yields exactly `opts.scale` output pixels per CSS pixel.
   const dpr = dims.dpr && dims.dpr > 0 ? dims.dpr : 1;
+  const zoom = dims.zoom && dims.zoom > 0 ? dims.zoom : 1;
   const scale = (opts.scale && opts.scale > 0 ? opts.scale : DEFAULT_SCREENSHOT_SCALE) / dpr;
+  const clip = (x: number, y: number, width: number, height: number): CaptureClip => ({
+    x: x * zoom, y: y * zoom, width: width * zoom, height: height * zoom, scale,
+  });
   if (opts.element) {
     const realH = Math.max(1, Math.round(opts.element.h));
     const clipH = Math.min(opts.element.h, MAX_CAPTURE_PX);
     return {
-      clip: { x: opts.element.x, y: opts.element.y, width: opts.element.w, height: clipH, scale },
+      clip: clip(opts.element.x, opts.element.y, opts.element.w, clipH),
       captureBeyondViewport: true,
       width: Math.max(1, Math.round(opts.element.w)),
       height: Math.min(realH, MAX_CAPTURE_PX),
@@ -96,7 +103,7 @@ export function planScreenshot(
   if (opts.fullPage) {
     const clipH = Math.min(dims.fullH, MAX_CAPTURE_PX);
     return {
-      clip: { x: 0, y: 0, width: dims.fullW, height: clipH, scale },
+      clip: clip(0, 0, dims.fullW, clipH),
       captureBeyondViewport: true,
       width: dims.fullW,
       height: clipH,
@@ -104,11 +111,11 @@ export function planScreenshot(
       fullHeight: dims.fullH,
     };
   }
-  // Plain viewport: capture what's visible. A clip is only needed to apply a
-  // scale; at scale 1 on a 1x display the bare capture is identical and cheaper.
+  // Plain viewport: a clip is needed to apply an output scale or page zoom.
+  // The caller can also force a fresh paint with a viewport clip at 100%.
   return {
-    ...(scale !== 1
-      ? { clip: { x: dims.scrollX ?? 0, y: dims.scrollY ?? 0, width: dims.w, height: dims.h, scale } }
+    ...(scale !== 1 || zoom !== 1
+      ? { clip: clip(dims.scrollX ?? 0, dims.scrollY ?? 0, dims.w, dims.h) }
       : {}),
     captureBeyondViewport: false,
     width: dims.w,

@@ -165,7 +165,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   { name: 'get_html', description: 'Get HTML of the page or an element. Output is capped (see maxBytes) and cut at a tag boundary; narrow it with `selector` rather than raising the cap when you can. Password field values are always blanked.', inputSchema: { ...TARGET_PROPS, ...FRAME_PROPS, outer: z.boolean().optional(), tabId: tabIdField, maxBytes: maxBytesField } },
   { name: 'snapshot', description: 'Accessibility snapshot: interactive elements with refs to target by `ref` (more reliable than guessing CSS selectors). Pass diff:true to get only what changed since the last snapshot of this tab - far cheaper in a click/read loop. Password fields appear as secret:true with no value.', inputSchema: { interactiveOnly: z.boolean().optional(), max: z.number().optional(), diff: z.boolean().describe('Return added/removed/changed elements since the previous snapshot of this tab instead of the whole tree').optional(), failOnAuthWall: authWallField, ...FRAME_PROPS, tabId: tabIdField } },
   { name: 'page_watch', description: 'Save a local page checkpoint and compare it later. Actions: create (name), compare (watchId), list, delete. Stores accessibility labels and state, never form values. Site allowlist still applies.', inputSchema: { action: z.enum(['create', 'compare', 'list', 'delete']), name: z.string().optional(), watchId: z.string().optional(), tabId: tabIdField } },
-  { name: 'get_cookies', description: "Read cookies visible to the tab's URL (or a given url).", inputSchema: { url: z.string().optional(), tabId: tabIdField } },
+  { name: 'get_cookies', description: "Cookies for the tab's URL (or url); values need --enable-cookie-values.", inputSchema: { url: z.string().optional(), tabId: tabIdField } },
   { name: 'storage', description: 'Read/write localStorage (or sessionStorage). op: get|set|remove|clear.', inputSchema: { op: z.enum(['get', 'set', 'remove', 'clear']), key: z.string().optional(), value: z.string().optional(), session: z.boolean().optional(), tabId: tabIdField } },
   { name: 'eval', description: 'Evaluate JavaScript in the page (disabled in safe-mode).', inputSchema: { expression: z.string(), awaitPromise: z.boolean().optional(), ...FRAME_PROPS, tabId: tabIdField } },
   { name: 'wait_for', description: 'Wait for a selector or text to appear/disappear.', inputSchema: { selector: z.string().optional(), textContains: z.string().optional(), gone: z.boolean().optional(), timeoutMs: z.number().optional(), ...FRAME_PROPS, tabId: tabIdField, failOnAuthWall: authWallField } },
@@ -487,6 +487,9 @@ type ToolHandler = (args: Record<string, unknown>, ctx: ToolCtx) => Promise<Call
 const GATE_CONTEXT = 'cannot resolve the target tab URL for the policy gate';
 /** How long the gate waits for a just-opened background tab to report its URL. */
 const OPENING_TAB_WAIT_MS = 5_000;
+
+/** What `get_cookies` returns in place of a value unless --enable-cookie-values is set. */
+const COOKIE_VALUE_HIDDEN = '[hidden]';
 
 /**
  * Resolve the URL the policy should be evaluated against: the URL of the tab
@@ -1088,7 +1091,15 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     // Cookies for another URL are that site's secrets: it must be allowed too.
     const url = optionalString(a, 'url');
     if (url !== undefined) await gate(ctx, 'get_text', { url });
-    return jsonResult(await ctx.ex.getCookies({ tabId: tabId(a), url }));
+    const result = await ctx.ex.getCookies({ tabId: tabId(a), url });
+    if (ctx.policy.allowCookieValues) return jsonResult(result);
+    // A session cookie is the login itself: whoever holds its value can use the
+    // account from anywhere. The browser stays signed in without the agent ever
+    // seeing it, so hide every value unless the operator opted in.
+    return jsonResult({
+      cookies: result.cookies.map((c) => ({ ...c, value: COOKIE_VALUE_HIDDEN })),
+      valuesHidden: 'Cookie values are hidden. Ask the user to restart the server with --enable-cookie-values if they need them.',
+    });
   },
   storage: async (a, ctx) => {
     const op = requireString(a, 'op') as 'get' | 'set' | 'remove' | 'clear';
