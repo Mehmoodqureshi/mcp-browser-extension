@@ -1,6 +1,6 @@
 # Privacy policy — MCP Browser Extension
 
-Last updated: 2026-10-17
+Last updated: 2026-10-20
 
 MCP Browser Extension is an open-source tool
 (MIT, https://github.com/Mehmoodqureshi/mcp-browser-extension) that lets an AI agent
@@ -102,15 +102,18 @@ the local HTTP endpoint; its URL includes the access key and must stay private.
 Restart with `--rotate-remote-key` to revoke access.
 
 By default, the server asks for an email the first time you use a browser tool. The
-website sends a Firebase email sign-in link; opening it verifies the address and
+website sends a Firebase email sign-in link; opening it and confirming
+**Verify this device** verifies the address and
 grants access to that server installation. Firebase Authentication stores the
 email address. Firestore stores the Firebase user id, a hash of a random device
 secret, whether that device is active, and short-lived verification requests.
 The server stores the random device id and secret locally in
 `~/.mcp-browser-extension/access.json` with owner-only file permissions on POSIX systems.
 On Windows, the file inherits the ACL of the user's profile directory. The
-address is
-entered through the MCP client's input prompt and sent by the local server to
+address is entered through the MCP client's input prompt or, when that prompt
+is unavailable or dismissed, a temporary form bound to the local loopback
+address. The server opens that form in the default browser and also returns its
+link. The form expires after 10 minutes. The email is sent by the local server to
 the MCP Browser Extension website to request the sign-in email. The account
 can be disabled in Firebase Authentication, and an individual device grant can
 be revoked in Firestore.

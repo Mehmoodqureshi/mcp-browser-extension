@@ -35,7 +35,7 @@ MCP Browser Extension is an open-source MCP server and extension (MIT) that lets
 
 How it works
 - You start the MCP Browser Extension server (npm package mcp-browser-extension) from your MCP client.
-- On first use, enter your email in the client's prompt and open the sign-in link. The server reports verification and continues the waiting browser action.
+- On first use, enter your email in the client's prompt or local browser form that opens automatically and open the sign-in link, then click Verify this device. The server reports verification and continues the waiting browser action.
 - This extension connects to that server on 127.0.0.1 and carries out its commands: tabs, navigation, clicks, typing, page reads, screenshots, downloads.
 - The extension sends browser results to your local server, which forwards them to your configured MCP client. An optional tunnel allows remote clients to connect using a private access key. Optional proxy IP checks contact ipinfo.io or api.ipify.org.
 
@@ -43,6 +43,7 @@ Safety
 - The server is deny-all by default. You choose which domains the agent may touch; everything else is refused before a command runs.
 - Clicking and typing, downloads, uploads, and script evaluation are each separate opt-ins on the server.
 - Every call is recorded to a local history file so you can see what the agent did afterwards.
+- The cookie-reading tool hides cookie values by default; exposing them requires an explicit server setting.
 
 Setup
 1. Install and register the server: see https://mcp-browser-extension.com/docs/quickstart
@@ -103,7 +104,7 @@ Leave the username and password fields blank. Paste the following into
 **Additional instructions** (500 characters maximum):
 
 ```text
-Use an MCP client with interactive input prompts. Register: npx -y mcp-browser-extension@latest --allow-domain example.com --enable-mutations --persist-token. Call chrome_status, enter your own email and open its sign-in link. If ACCESS_PENDING, call chrome_status again. Install this extension, open Settings and click Connect if unpaired. Ask the agent to open https://example.com and read its heading. No shared password is needed. Setup: https://mcp-browser-extension.com/docs/quickstart
+Register: npx -y mcp-browser-extension@latest --allow-domain example.com --enable-mutations --persist-token. Call chrome_status. Enter your email in the prompt or local form link, then open the email link and click Verify this device. If ACCESS_PENDING, call chrome_status again. Install this extension, open Settings and click Connect if unpaired. Ask the agent to open https://example.com and read its heading. No shared password. Setup: https://mcp-browser-extension.com/docs/quickstart
 ```
 
 ## 6. Distribution

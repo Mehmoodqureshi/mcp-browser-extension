@@ -128,12 +128,23 @@ the Web Store build passes review separately and can trail it by a version.
 
 The first browser tool call opens an email prompt in the MCP client. Ask the
 human to enter an email address. The website sends a Firebase sign-in link;
-the human opens it in their browser and returns to the MCP client. Do not ask
+the human opens it in their browser, clicks **Verify this device**, and returns
+to the MCP client. Do not ask
 them to copy or paste a verification code. The server detects the verified
 link automatically and reports the result to the waiting tool call. On success,
 the result includes **Email verified** and the requested browser action continues.
 The user does not need to send another chat message. Progress updates and status
 notifications are also sent to clients that display them.
+
+If the client suppresses or cannot display the prompt, or it is dismissed,
+the server automatically opens a temporary local browser form and returns
+`ACCESS_INPUT_REQUIRED` with its link. Show the link as a backup if the form
+did not appear on the computer running the server.
+The human enters their email, opens the sign-in link from their inbox, and clicks
+**Verify this device**. Do not fill
+the form or open their email for them. The form expires after 10 minutes.
+After they submit it, call `chrome_status` to wait for verification.
+YOLO/bypass permission mode does not skip email verification.
 
 If the human explicitly configured `--no-email-verification`, there is no email
 step; continue to pairing. This option is intended only for trusted local
@@ -146,9 +157,7 @@ remain blocked until access is confirmed. Cancellation stops the waiting action,
 while background verification can still activate the local installation.
 
 Click **Connect** in the extension if the result says Chrome is not already
-paired. This requires the MCP client to
-support elicitation; clients that cannot show the prompt cannot activate
-through this flow.
+paired.
 
 The server also writes a `pairing.json` file for Load unpacked installs, which
 may connect automatically. For the Chrome Web Store copy, or whenever Chrome

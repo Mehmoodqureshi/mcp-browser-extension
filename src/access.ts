@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ProgressNotification } from '@modelcontextprotocol/sdk/types.js';
 import { runtimeEnv } from './compat';
-import { createBrowserEmailPrompt, type BrowserEmailPrompt } from './access-browser';
+import { createBrowserEmailPrompt, openBrowserEmailPrompt, type BrowserEmailPrompt } from './access-browser';
 
 type AccessState = { deviceId: string; deviceSecret: string; challengeId?: string; verified?: boolean };
 const SITE = (runtimeEnv('ACCESS_API') ?? 'https://mcp-browser-extension.com/api/access').replace(/\/$/, '');
@@ -28,11 +28,12 @@ const EMAIL_SCHEMA = {
 };
 const validUntil = new Map<string, number>();
 const currentChecks = new Map<string, Promise<AccessCheck>>();
+const pendingEmailStarts = new Map<string, Promise<AccessCheck>>();
 const pollingChallenges = new Map<string, VerificationWatcher>();
 const completionToReport = new Map<string, AccessOutcome>();
 const browserPrompts = new Map<string, BrowserEmailPrompt>();
 const VERIFIED: AccessOutcome = { status: 'verified', message: 'Email verified. MCP Browser Extension access is active.' };
-const PENDING: AccessOutcome = { status: 'pending', message: '[ACCESS_PENDING] Email verification is still pending. Open the sign-in link sent to your email. Continue waiting by calling chrome_status; no new email or chat reply is needed.' };
+const PENDING: AccessOutcome = { status: 'pending', message: '[ACCESS_PENDING] Email verification is still pending. Open the sign-in link sent to your email and click Verify this device. Continue waiting by calling chrome_status; no new email or chat reply is needed.' };
 const CANCELLED: AccessOutcome = { status: 'cancelled', message: 'Email verification wait was cancelled. The browser action was not run.' };
 const UNAVAILABLE: AccessOutcome = { status: 'unavailable', message: 'Email verification could not be confirmed because the verification service is unavailable. Access remains blocked. Retry chrome_status shortly.' };
 
@@ -146,10 +147,10 @@ async function waitForEmailApproval(server: Server, dataDir: string, challengeId
       await request.sendNotification({ method: 'notifications/progress', params: { progressToken: request.progressToken, progress: ++progress, message } });
     } catch { /* Progress is optional; the tool result still carries the outcome. */ }
   };
-  await report('Sign-in link sent. Open it in your email; this tool is waiting for verification automatically.');
+  await report('Sign-in link sent. Open it in your email and click Verify this device; this tool is waiting for verification automatically.');
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
-  const heartbeat = setInterval(() => { void report('Waiting for email verification. Open the sign-in link sent to your email.'); }, 5_000);
+  const heartbeat = setInterval(() => { void report('Waiting for email verification. Open the sign-in link sent to your email and click Verify this device.'); }, 5_000);
   try {
     const outcome = await Promise.race([
       approval.promise,
@@ -186,19 +187,27 @@ function result(message: string) {
 
 const inputRequired = (url: string): AccessOutcome => ({
   status: 'input-required',
-  message: '[ACCESS_INPUT_REQUIRED] The MCP client did not provide an email address. Its input dialog may be disabled in YOLO/bypass mode, unavailable, or dismissed. ' +
-    `To verify, open this local page on the computer running MCP Browser Extension:\n${url}\n` +
-    'Enter your email there and open the sign-in link from your inbox. This page expires in 10 minutes. ' +
+  message: '[ACCESS_INPUT_REQUIRED] Complete email verification in the browser form. It opens automatically when the client does not display its email prompt. ' +
+    `If no form appeared, open this local page on the computer running MCP Browser Extension:\n${url}\n` +
+    'Enter your email there, open the sign-in link from your inbox, and click Verify this device. This page expires in 10 minutes. ' +
     'Show this link to the user; do not fill the form or open their email for them. After they submit their email, call chrome_status to wait for verification. Access remains blocked until verification succeeds.',
 });
 
-async function startEmail(server: Server, dataDir: string, state: AccessState, input: string): Promise<AccessCheck> {
+function startEmail(server: Server, dataDir: string, state: AccessState, input: string): Promise<AccessCheck> {
+  const existing = pendingEmailStarts.get(dataDir);
+  if (existing) return existing;
+  const sending = sendVerificationEmail(server, dataDir, state, input)
+    .finally(() => { pendingEmailStarts.delete(dataDir); });
+  pendingEmailStarts.set(dataDir, sending);
+  return sending;
+}
+
+async function sendVerificationEmail(server: Server, dataDir: string, state: AccessState, input: string): Promise<AccessCheck> {
   const email = input.trim().toLowerCase();
   if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { status: 'denied', message: 'Enter a valid email address.' };
   }
   state.challengeId = randomBytes(32).toString('hex');
-  saveState(dataDir, state);
   let started;
   try {
     started = await api('start', { email, challengeId: state.challengeId, deviceId: state.deviceId, deviceSecret: state.deviceSecret });
@@ -213,6 +222,9 @@ async function startEmail(server: Server, dataDir: string, state: AccessState, i
     const message = typeof started.data.error === 'string' ? started.data.error : 'The verification email could not be sent. Check your connection and try again.';
     return { status: 'unavailable', message };
   }
+  // Other tool calls and local processes must not poll a challenge before the
+  // backend creates it; a premature 410 would discard a valid sign-in request.
+  saveState(dataDir, state);
   await notifyAccess(server, { status: 'pending', message: 'A sign-in link has been sent. Open it from your email; the browser tool is waiting for verification.' });
   return { challengeId: state.challengeId };
 }
@@ -233,6 +245,7 @@ async function offerBrowserPrompt(server: Server, dataDir: string, request: Acce
   }, { onClose: () => { browserPrompts.delete(dataDir); } });
   browserPrompts.set(dataDir, prompt);
   if (request.signal?.aborted) { prompt.close(); return CANCELLED; }
+  openBrowserEmailPrompt(prompt.url);
   return inputRequired(prompt.url);
 }
 
@@ -271,6 +284,8 @@ export async function requireAccess(server: Server, dataDir: string, request: Ac
 export const bypassEmailVerification: typeof requireAccess = async () => null;
 
 async function check(server: Server, dataDir: string, request: AccessRequest): Promise<AccessCheck> {
+  const sending = pendingEmailStarts.get(dataDir);
+  if (sending) return sending;
   const state = loadOrCreate(dataDir);
   try {
     if (state.verified) {

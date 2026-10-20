@@ -1,9 +1,17 @@
-## Unreleased
+## 0.9.31 - 2026-10-20
+
+Email verification works when the client's input prompt is suppressed,
+screenshots respect page zoom, and cookie values are hidden by default.
 
 - fix: when an MCP client suppresses or cannot display the email input dialog,
-  verification now offers a temporary local browser form. YOLO/bypass users
+  verification now automatically opens a temporary local browser form and
+  includes a backup link in the tool result. YOLO/bypass users
   can verify without changing client permissions. Email-link and device-grant
   checks remain required before any browser tool runs.
+- fix: a browser-tool retry while the verification form is sending an email
+  waits for the request to be created, instead of incorrectly expiring it.
+- fix: opening or navigating a tab ignores load events from its initial blank
+  page, so the next tool waits for the requested website.
 - fix: screenshots at non-default Chrome page zoom no longer crop the page or
   return the wrong image size. Viewport, full-page and element captures now
   account for zoom, including scrolled pages and Retina displays, without
@@ -20,10 +28,11 @@
   now returns the requested size.
 - security: `get_cookies` hides every cookie value by default and returns
   `[hidden]` in its place, with names, domain, path and flags unchanged. A
-  session cookie is the login itself: whoever holds its value can use the
-  account from anywhere, with no password. The browser stays signed in without
-  the agent ever seeing it. Pass `--enable-cookie-values` (or set
+  session cookie can grant access to an account without its password.
+  Chrome stays signed in without exposing those values through `get_cookies`.
+  Pass `--enable-cookie-values` (or set
   `allowCookieValues` in a policy file) to get the values back.
+- extension: 0.9.31; a new Store ZIP is required.
 
 ## 0.9.30 - 2026-10-19
 

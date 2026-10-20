@@ -297,8 +297,9 @@ interface NavigationWait {
   cancel(): void;
 }
 
-function armNavigationWait(tabId: number, waitUntil: WaitUntil, timeoutMs = 30_000): NavigationWait {
+export function armNavigationWait(tabId: number, waitUntil: WaitUntil, timeoutMs = 30_000, expectedUrl?: string): NavigationWait {
   const start = Date.now();
+  const destination = expectedUrl === undefined ? undefined : new URL(expectedUrl).href;
   const NETWORK_QUIET_MS = 500;
   let done: () => void = () => undefined;
   const finished = new Promise<void>((resolve) => {
@@ -323,21 +324,30 @@ function armNavigationWait(tabId: number, waitUntil: WaitUntil, timeoutMs = 30_0
   };
   const onBefore = (d: chrome.webNavigation.WebNavigationParentedCallbackDetails): void => {
     if (!isTop(d)) return;
+    // A newly created tab can still be loading its initial about:blank when
+    // these listeners are armed. Follow only the requested navigation and its
+    // redirects, rather than letting that initial document finish this wait.
+    if (destination && !started && d.url !== destination) return;
     started = true;
     startUrl = d.url;
     committed = false;
   };
   const onCommitted = (d: chrome.webNavigation.WebNavigationTransitionCallbackDetails): void => {
-    if (isTop(d)) committed = true;
+    if (!isTop(d)) return;
+    const redirected = d.transitionQualifiers.some((q) => q === 'server_redirect' || q === 'client_redirect');
+    if (destination && (!started || (d.url !== startUrl && !redirected))) return;
+    // HTTP redirects can commit a different URL without another before event.
+    startUrl = d.url;
+    committed = true;
   };
   const onDom = (d: chrome.webNavigation.WebNavigationFramedCallbackDetails): void => {
-    if (isTop(d) && committed && waitUntil === 'domcontentloaded') done();
+    if (isTop(d) && committed && (!destination || d.url === startUrl) && waitUntil === 'domcontentloaded') done();
   };
   const onCompleted = (d: chrome.webNavigation.WebNavigationFramedCallbackDetails): void => {
-    if (isTop(d) && committed) reached();
+    if (isTop(d) && committed && (!destination || d.url === startUrl)) reached();
   };
   const onSameDoc = (d: chrome.webNavigation.WebNavigationTransitionCallbackDetails): void => {
-    if (isTop(d)) done();
+    if (isTop(d) && (!destination || d.url === destination)) done();
   };
   const onError = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails): void => {
     if (!isTop(d) || !started) return;
@@ -984,7 +994,7 @@ export class ChromeExecutor {
 
         if (claim.needsNav) {
           // Under the server's 30s timeout for tab_new.
-          const nav = armNavigationWait(claim.id, 'load', 25_000);
+          const nav = armNavigationWait(claim.id, 'load', 25_000, url);
           await chrome.tabs.update(claim.id, { url }).catch((err: unknown) => {
             nav.cancel();
             throw err;
@@ -1009,7 +1019,7 @@ export class ChromeExecutor {
         const id = await targetTab(cmd);
         const url = String(cmd.params.url);
         // Arm BEFORE triggering so a fast page cannot finish before we listen.
-        const nav = armNavigationWait(id, waitUntilOf(cmd));
+        const nav = armNavigationWait(id, waitUntilOf(cmd), 30_000, url);
         await chrome.tabs.update(id, { url }).catch((err: unknown) => {
           nav.cancel();
           throw err;

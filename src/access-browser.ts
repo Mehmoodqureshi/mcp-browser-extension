@@ -1,6 +1,7 @@
 /** A temporary loopback email form for clients that cannot display elicitation. */
 import { randomBytes } from 'node:crypto';
 import { createServer, type ServerResponse } from 'node:http';
+import { spawn } from 'node:child_process';
 
 export interface BrowserEmailPrompt {
   url: string;
@@ -8,6 +9,20 @@ export interface BrowserEmailPrompt {
 }
 
 export interface EmailSubmission { ok: boolean; message: string }
+
+/** Best effort: the tool also returns the link for remote/headless computers. */
+export function openBrowserEmailPrompt(url: string): void {
+  // Only launch a form we host, never a URL received from an MCP request.
+  if (!/^http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]{64}$/.test(url)) return;
+  const command = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['url.dll,FileProtocolHandler', url] : [url];
+  try {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', () => { /* The displayed link remains usable if no browser is available. */ });
+    child.unref();
+  } catch { /* Keep the form available even if the operating system cannot open it. */ }
+}
 
 const escapeHtml = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -48,7 +63,7 @@ export async function createBrowserEmailPrompt(
   let busy = false;
   let closed = false;
   let expiry: ReturnType<typeof setTimeout> | undefined;
-  const sentMessage = 'A sign-in link has been sent. Open it from your email to finish verification.';
+  const sentMessage = 'A sign-in link has been sent. Open it from your email and click Verify this device to finish verification.';
   const respond = (res: ServerResponse, status: number, message: string): void => {
     res.writeHead(status, {
       'content-type': 'text/html; charset=utf-8',

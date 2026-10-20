@@ -174,17 +174,20 @@ the way to install it.
 **3. Verify your email.** In your MCP client, ask the agent to call
 `chrome_status`. On this first browser tool call, the client shows an email
 prompt. Enter an address you can access, then open the sign-in link sent to
-that address. The waiting tool reports **Email verified** and continues.
+that address and click **Verify this device**. The waiting tool reports
+**Email verified** and continues.
 
 If the tool returns `ACCESS_PENDING`, ask the agent to call `chrome_status`
 again to keep waiting on the same link. You do not need another email or a
 verification code.
 
 If your client suppresses the prompt (for example, in YOLO/bypass mode), does
-not support MCP elicitation, or the dialog is dismissed, the tool returns
-`ACCESS_INPUT_REQUIRED` with a temporary local verification link. Open it on
-the computer running the MCP server, enter your email in the browser form,
-and open the sign-in link from your inbox. Then call `chrome_status` to continue.
+not support MCP elicitation, or the dialog is dismissed, the server automatically
+opens a temporary local verification form in your browser. The tool also returns
+`ACCESS_INPUT_REQUIRED` with the link, so you can open it yourself if necessary
+on the computer running the MCP server. Enter your email in the browser form,
+and open the sign-in link from your inbox. Click **Verify this device**, then
+call `chrome_status` to continue.
 The local form expires after 10 minutes; call the tool again for a fresh one.
 Opening the form does not send an email, and access remains blocked until the
 email link and device grant are verified. Installing the extension alone does
@@ -684,9 +687,9 @@ it says nothing about what is on them. A logged-in page routinely renders a
 session token into a script tag or an API key onto a settings screen.
 
 - **Cookie values are hidden by default.** `get_cookies` returns each cookie's
-  name, domain, path and flags with the value replaced by `[hidden]`: a session
-  cookie is the login itself, and anyone holding it can use the account without
-  a password. Pass `--enable-cookie-values` if a task really needs them.
+  name, domain, path and flags with the value replaced by `[hidden]`. A session
+  cookie can grant access to an account without its password.
+  Pass `--enable-cookie-values` if a task really needs them.
 - **Password field values are always suppressed** — in `get_html`, and in
   `snapshot`, where the field still appears (so you can type into it) flagged
   `secret: true` with no value. No flag, no opt-in: nobody wants those characters.

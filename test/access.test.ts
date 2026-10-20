@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import childProcess, { type ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -27,8 +29,13 @@ function setup(t: TestContext) {
   const originalFetch = globalThis.fetch;
   const state = {
     status: 'pending', allowed: true, prompts: 0, starts: 0, polls: 0, validations: 0,
+    browserForms: [] as string[],
     notifications: [] as Array<{ data: { status: string; message: string } }>,
   };
+  t.mock.method(childProcess, 'spawn', (_command: string, args: string[]) => {
+    state.browserForms.push(args.at(-1)!);
+    return Object.assign(new EventEmitter(), { unref() {} }) as ChildProcess;
+  });
   const server = {
     elicitInput: async () => {
       state.prompts++;
@@ -228,9 +235,12 @@ test('a suppressed email dialog offers a browser form instead of a retry loop', 
   const response = await requireAccess(h.server, h.dataDir);
   assert.match(response!.content[0].text, /http:\/\/127\.0\.0\.1:\d+\//);
   assert.equal(h.state.starts, 0, 'no email is sent before the person supplies an address');
+  assert.equal(h.state.browserForms.length, 1, 'the form opens without relying on the agent');
+  assert.ok(response!.content[0].text.includes(h.state.browserForms[0]));
   assert.notEqual(h.saved().verified, true, 'suppressing a prompt cannot grant access');
   const repeated = await requireAccess(h.server, h.dataDir);
   assert.deepEqual(repeated, response, 'retries reuse the form instead of prompting again');
+  assert.equal(h.state.browserForms.length, 1, 'retries must not open duplicate tabs');
 });
 
 test('unsupported, cancelled, and empty elicitation results all offer a manual form', async (t) => {
@@ -247,6 +257,7 @@ test('unsupported, cancelled, and empty elicitation results all offer a manual f
       assert.match(response!.content[0].text, /ACCESS_INPUT_REQUIRED/);
       assert.match(response!.content[0].text, /http:\/\/127\.0\.0\.1:\d+\//);
       assert.equal(h.state.starts, 0);
+      assert.equal(h.state.browserForms.length, 1);
     });
   }
 });
@@ -258,6 +269,22 @@ test('cancelling the actual tool request does not open a fallback verification f
   const response = await requireAccess(h.server, h.dataDir, { signal: controller.signal });
   assert.match(response!.content[0].text, /cancelled/);
   assert.doesNotMatch(response!.content[0].text, /http:\/\//);
+  assert.equal(h.state.starts, 0);
+  assert.equal(h.state.browserForms.length, 0, 'a cancelled tool must not open a tab');
+});
+
+test('a failed browser launch leaves the manual verification form available', async (t) => {
+  const h = setup(t);
+  h.server.elicitInput = async () => ({ action: 'decline' });
+  t.mock.method(childProcess, 'spawn', () => {
+    const child = Object.assign(new EventEmitter(), { unref() {} }) as ChildProcess;
+    queueMicrotask(() => child.emit('error', new Error('No desktop browser')));
+    return child;
+  });
+  const response = await requireAccess(h.server, h.dataDir);
+  const url = response!.content[0].text.match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
+  assert.equal((await fetch(url)).status, 200);
+  assert.notEqual(h.saved().verified, true);
   assert.equal(h.state.starts, 0);
 });
 
@@ -284,6 +311,49 @@ test('browser fallback completes the same grant validation with no secret in the
   let verified = false;
   assert.equal(await requireAccess(h.server, h.dataDir, { onVerified: () => { verified = true; } }), null);
   assert.equal(verified, true);
+  assert.equal(h.state.validations, 1);
+});
+
+test('a tool retry while the browser form is sending email waits for the challenge to exist', async (t) => {
+  const h = setup(t);
+  h.server.elicitInput = async () => ({ action: 'decline' });
+  h.state.status = 'expired'; // The backend has no challenge until /start finishes.
+  const response = await requireAccess(h.server, h.dataDir);
+  const url = response!.content[0].text.match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
+  const html = await (await fetch(url)).text();
+  const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+  const savedFetch = globalThis.fetch;
+  let release!: () => void;
+  const sending = new Promise<void>((resolve) => { release = resolve; });
+  let started = false;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/start')) {
+      started = true;
+      await sending;
+      h.state.status = 'pending';
+    }
+    return savedFetch(input, init);
+  };
+  const submitted = fetch(url, {
+    method: 'POST', headers: { origin: new URL(url).origin, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'user@example.com', csrf }),
+  }).catch(() => null);
+  await until(() => started);
+  const challenge = h.saved().challengeId;
+  const retry = requireAccess(h.server, h.dataDir);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(h.state.polls, 0, 'do not check a challenge before the backend creates it');
+    assert.equal(h.saved().challengeId, challenge);
+    assert.notEqual(h.saved().verified, true);
+  } finally {
+    release();
+    await submitted;
+  }
+  assert.equal((await submitted)?.status, 200);
+  h.state.status = 'approved';
+  assert.equal(await retry, null);
+  assert.equal(h.state.starts, 1);
   assert.equal(h.state.validations, 1);
 });
 
