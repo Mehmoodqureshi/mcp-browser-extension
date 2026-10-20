@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { ProgressNotification } from '@modelcontextprotocol/sdk/types.js';
 import { runtimeEnv } from './compat';
+import { createBrowserEmailPrompt, type BrowserEmailPrompt } from './access-browser';
 
 type AccessState = { deviceId: string; deviceSecret: string; challengeId?: string; verified?: boolean };
 const SITE = (runtimeEnv('ACCESS_API') ?? 'https://mcp-browser-extension.com/api/access').replace(/\/$/, '');
 let accessPollMs = 2_000;
 let accessWaitMs = 45_000;
-type AccessOutcome = { status: 'verified' | 'pending' | 'expired' | 'denied' | 'unavailable' | 'cancelled'; message: string };
+type AccessOutcome = { status: 'verified' | 'pending' | 'input-required' | 'expired' | 'denied' | 'unavailable' | 'cancelled'; message: string };
 type AccessCheck = AccessOutcome | { challengeId: string } | null;
 type VerificationWatcher = { promise: Promise<AccessOutcome>; waiting: AccessOutcome };
 export type AccessRequest = {
@@ -29,6 +30,7 @@ const validUntil = new Map<string, number>();
 const currentChecks = new Map<string, Promise<AccessCheck>>();
 const pollingChallenges = new Map<string, VerificationWatcher>();
 const completionToReport = new Map<string, AccessOutcome>();
+const browserPrompts = new Map<string, BrowserEmailPrompt>();
 const VERIFIED: AccessOutcome = { status: 'verified', message: 'Email verified. MCP Browser Extension access is active.' };
 const PENDING: AccessOutcome = { status: 'pending', message: '[ACCESS_PENDING] Email verification is still pending. Open the sign-in link sent to your email. Continue waiting by calling chrome_status; no new email or chat reply is needed.' };
 const CANCELLED: AccessOutcome = { status: 'cancelled', message: 'Email verification wait was cancelled. The browser action was not run.' };
@@ -38,6 +40,11 @@ const UNAVAILABLE: AccessOutcome = { status: 'unavailable', message: 'Email veri
 export function setAccessPollIntervalForTesting(ms: number, waitMs = 45_000): void {
   accessPollMs = Math.max(1, ms);
   accessWaitMs = Math.max(1, waitMs);
+}
+
+/** Close a pending form when verification finishes or its owner shuts down. */
+export function closeAccessBrowserPrompt(dataDir: string): void {
+  browserPrompts.get(dataDir)?.close();
 }
 
 function statePath(dataDir: string): string { return join(dataDir, 'access.json'); }
@@ -80,6 +87,7 @@ function watchForEmailApproval(server: Server, dataDir: string, challengeId: str
     let delayMs = accessPollMs;
     const finish = (outcome: AccessOutcome) => {
       pollingChallenges.delete(challengeId);
+      closeAccessBrowserPrompt(dataDir);
       completionToReport.set(dataDir, outcome);
       void notifyAccess(server, outcome);
       resolve(outcome);
@@ -176,6 +184,58 @@ function result(message: string) {
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
 
+const inputRequired = (url: string): AccessOutcome => ({
+  status: 'input-required',
+  message: '[ACCESS_INPUT_REQUIRED] The MCP client did not provide an email address. Its input dialog may be disabled in YOLO/bypass mode, unavailable, or dismissed. ' +
+    `To verify, open this local page on the computer running MCP Browser Extension:\n${url}\n` +
+    'Enter your email there and open the sign-in link from your inbox. This page expires in 10 minutes. ' +
+    'Show this link to the user; do not fill the form or open their email for them. After they submit their email, call chrome_status to wait for verification. Access remains blocked until verification succeeds.',
+});
+
+async function startEmail(server: Server, dataDir: string, state: AccessState, input: string): Promise<AccessCheck> {
+  const email = input.trim().toLowerCase();
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { status: 'denied', message: 'Enter a valid email address.' };
+  }
+  state.challengeId = randomBytes(32).toString('hex');
+  saveState(dataDir, state);
+  let started;
+  try {
+    started = await api('start', { email, challengeId: state.challengeId, deviceId: state.deviceId, deviceSecret: state.deviceSecret });
+  } catch {
+    delete state.challengeId;
+    saveState(dataDir, state);
+    return { status: 'unavailable', message: 'The verification service could not be reached. Please try again.' };
+  }
+  if (!started.ok) {
+    delete state.challengeId;
+    saveState(dataDir, state);
+    const message = typeof started.data.error === 'string' ? started.data.error : 'The verification email could not be sent. Check your connection and try again.';
+    return { status: 'unavailable', message };
+  }
+  await notifyAccess(server, { status: 'pending', message: 'A sign-in link has been sent. Open it from your email; the browser tool is waiting for verification.' });
+  return { challengeId: state.challengeId };
+}
+
+async function offerBrowserPrompt(server: Server, dataDir: string, request: AccessRequest): Promise<AccessOutcome> {
+  if (request.signal?.aborted) return CANCELLED;
+  const existing = browserPrompts.get(dataDir);
+  if (existing) return inputRequired(existing.url);
+  const prompt = await createBrowserEmailPrompt(async (email) => {
+    const state = loadOrCreate(dataDir);
+    if (state.verified || state.challengeId) return { ok: false, message: 'A verification request is already active. Return to your assistant and call chrome_status.' };
+    const outcome = await startEmail(server, dataDir, state, email);
+    if (outcome && 'challengeId' in outcome) {
+      watchForEmailApproval(server, dataDir, outcome.challengeId);
+      return { ok: true, message: '' };
+    }
+    return { ok: false, message: outcome?.message ?? UNAVAILABLE.message };
+  }, { onClose: () => { browserPrompts.delete(dataDir); } });
+  browserPrompts.set(dataDir, prompt);
+  if (request.signal?.aborted) { prompt.close(); return CANCELLED; }
+  return inputRequired(prompt.url);
+}
+
 /** Returns null when authorized, otherwise a user-facing tool error. */
 export async function requireAccess(server: Server, dataDir: string, request: AccessRequest = {}): Promise<ReturnType<typeof result> | null> {
   if (request.signal?.aborted) return result(CANCELLED.message);
@@ -216,6 +276,7 @@ async function check(server: Server, dataDir: string, request: AccessRequest): P
     if (state.verified) {
       const revalidated = await api('validate', { deviceId: state.deviceId, deviceSecret: state.deviceSecret });
       if (revalidated.ok && revalidated.data.authorized === true) {
+        closeAccessBrowserPrompt(dataDir);
         validUntil.set(dataDir, Date.now() + 60_000);
         if (completionToReport.delete(dataDir)) return VERIFIED;
         return null;
@@ -231,6 +292,8 @@ async function check(server: Server, dataDir: string, request: AccessRequest): P
       return { status: 'unavailable', message: 'Access could not be checked right now. Retry the browser tool shortly.' };
     }
     if (!state.challengeId) {
+      const existing = browserPrompts.get(dataDir);
+      if (existing) return inputRequired(existing.url);
       let elicitation;
       // The SDK retains the signal listener after an elicitation completes.
       // Detach our forwarding listener so later cancellation cannot cancel a finished prompt.
@@ -246,24 +309,15 @@ async function check(server: Server, dataDir: string, request: AccessRequest): P
         }, { signal: prompt.signal, relatedRequestId: request.requestId });
       } catch {
         if (request.signal?.aborted) return CANCELLED;
-        return { status: 'unavailable', message: 'Your MCP client did not display the email prompt. This access flow requires an MCP client that supports elicitation. Enable elicitation or connect from a supported client, then retry.' };
+        return await offerBrowserPrompt(server, dataDir, request);
       } finally {
         request.signal?.removeEventListener('abort', cancelPrompt);
       }
       if (request.signal?.aborted) return CANCELLED;
-      if (elicitation.action !== 'accept' || typeof elicitation.content?.email !== 'string') return { status: 'cancelled', message: 'Email verification was not completed. Retry the browser tool to start again.' };
-      const email = elicitation.content.email.trim().toLowerCase();
-      if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { status: 'denied', message: 'That email address is invalid. Retry the browser tool and enter a valid address.' };
-      state.challengeId = randomBytes(32).toString('hex');
-      saveState(dataDir, state);
-      const started = await api('start', { email, challengeId: state.challengeId, deviceId: state.deviceId, deviceSecret: state.deviceSecret });
-      if (!started.ok) {
-        delete state.challengeId;
-        saveState(dataDir, state);
-        const message = typeof started.data.error === 'string' ? started.data.error : 'The verification email could not be sent. Check your connection and retry the browser tool.';
-        return { status: 'unavailable', message };
+      if (elicitation.action !== 'accept' || typeof elicitation.content?.email !== 'string' || !elicitation.content.email.trim()) {
+        return await offerBrowserPrompt(server, dataDir, request);
       }
-      await notifyAccess(server, { status: 'pending', message: 'A sign-in link has been sent. Open it from your email; the browser tool is waiting for verification.' });
+      return await startEmail(server, dataDir, state, elicitation.content.email);
     }
     return { challengeId: state.challengeId };
   } catch {

@@ -1,5 +1,9 @@
 ## Unreleased
 
+- fix: when an MCP client suppresses or cannot display the email input dialog,
+  verification now offers a temporary local browser form. YOLO/bypass users
+  can verify without changing client permissions. Email-link and device-grant
+  checks remain required before any browser tool runs.
 - fix: screenshots at non-default Chrome page zoom no longer crop the page or
   return the wrong image size. Viewport, full-page and element captures now
   account for zoom, including scrolled pages and Retina displays, without

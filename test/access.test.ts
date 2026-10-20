@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { ElicitRequestSchema, LoggingMessageNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ProgressNotification } from '@modelcontextprotocol/sdk/types.js';
-import { requireAccess, setAccessPollIntervalForTesting } from '../src/access';
+import { closeAccessBrowserPrompt, requireAccess, setAccessPollIntervalForTesting } from '../src/access';
 import { createServer } from '../src/mcp/server';
 import { configureManager, resetManagerForTesting } from '../src/executor/manager';
 import { StubExecutor } from '../src/executor/stub-executor';
@@ -36,8 +36,9 @@ function setup(t: TestContext) {
     },
     sendLoggingMessage: async (message: typeof state.notifications[number]) => { state.notifications.push(message); },
   } as unknown as Server;
-  globalThis.fetch = async (input) => {
+  globalThis.fetch = async (input, init) => {
     const url = String(input);
+    if (url.startsWith('http://127.0.0.1:')) return originalFetch(input, init);
     if (url.endsWith('/start')) {
       state.starts++;
       return Response.json({ status: 'pending' });
@@ -60,6 +61,7 @@ function setup(t: TestContext) {
     // Resolve any surviving watcher before restoring real network access.
     state.status = 'expired';
     if (existsSync(join(dataDir, 'access.json')) && saved().challengeId) await requireAccess(server, dataDir);
+    closeAccessBrowserPrompt(dataDir);
     globalThis.fetch = originalFetch;
     setAccessPollIntervalForTesting(2_000);
     rmSync(dataDir, { recursive: true, force: true });
@@ -220,6 +222,95 @@ test('notification transport errors do not prevent verified access', async (t) =
   assert.equal(h.saved().verified, true);
 });
 
+test('a suppressed email dialog offers a browser form instead of a retry loop', async (t) => {
+  const h = setup(t);
+  h.server.elicitInput = async () => ({ action: 'decline' });
+  const response = await requireAccess(h.server, h.dataDir);
+  assert.match(response!.content[0].text, /http:\/\/127\.0\.0\.1:\d+\//);
+  assert.equal(h.state.starts, 0, 'no email is sent before the person supplies an address');
+  assert.notEqual(h.saved().verified, true, 'suppressing a prompt cannot grant access');
+  const repeated = await requireAccess(h.server, h.dataDir);
+  assert.deepEqual(repeated, response, 'retries reuse the form instead of prompting again');
+});
+
+test('unsupported, cancelled, and empty elicitation results all offer a manual form', async (t) => {
+  for (const mode of ['unsupported', 'cancel', 'empty', 'missing'] as const) {
+    await t.test(mode, async (t) => {
+      const h = setup(t);
+      h.server.elicitInput = async () => {
+        if (mode === 'unsupported') throw new Error('Client does not support form elicitation');
+        if (mode === 'cancel') return { action: 'cancel' };
+        const content: Record<string, string> = mode === 'empty' ? { email: ' ' } : {};
+        return { action: 'accept', content };
+      };
+      const response = await requireAccess(h.server, h.dataDir);
+      assert.match(response!.content[0].text, /ACCESS_INPUT_REQUIRED/);
+      assert.match(response!.content[0].text, /http:\/\/127\.0\.0\.1:\d+\//);
+      assert.equal(h.state.starts, 0);
+    });
+  }
+});
+
+test('cancelling the actual tool request does not open a fallback verification form', async (t) => {
+  const h = setup(t);
+  const controller = new AbortController();
+  h.server.elicitInput = async () => { controller.abort(); return { action: 'cancel' }; };
+  const response = await requireAccess(h.server, h.dataDir, { signal: controller.signal });
+  assert.match(response!.content[0].text, /cancelled/);
+  assert.doesNotMatch(response!.content[0].text, /http:\/\//);
+  assert.equal(h.state.starts, 0);
+});
+
+test('browser fallback completes the same grant validation with no secret in the page or URL', async (t) => {
+  const h = setup(t);
+  h.server.elicitInput = async () => ({ action: 'decline' });
+  const response = await requireAccess(h.server, h.dataDir);
+  const url = response!.content[0].text.match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
+  const html = await (await fetch(url)).text();
+  assert.match(html, /type="email"/);
+  assert.ok(!html.includes(h.saved().deviceSecret));
+  assert.ok(!response!.content[0].text.includes(h.saved().deviceSecret));
+  const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+  const send = () => fetch(url, {
+    method: 'POST', headers: { origin: new URL(url).origin, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'user@example.com', csrf }),
+  });
+  assert.equal((await send()).status, 200);
+  assert.equal((await send()).status, 200);
+  assert.equal(h.state.starts, 1, 'a repeated submit must not send another email');
+  assert.notEqual(h.saved().verified, true);
+  h.state.status = 'approved';
+  await until(() => h.saved().verified === true);
+  let verified = false;
+  assert.equal(await requireAccess(h.server, h.dataDir, { onVerified: () => { verified = true; } }), null);
+  assert.equal(verified, true);
+  assert.equal(h.state.validations, 1);
+});
+
+test('a failed email send through the browser form can be retried', async (t) => {
+  const h = setup(t);
+  h.server.elicitInput = async () => ({ action: 'decline' });
+  const response = await requireAccess(h.server, h.dataDir);
+  const url = response!.content[0].text.match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
+  const html = await (await fetch(url)).text();
+  const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+  const savedFetch = globalThis.fetch;
+  let fail = true;
+  globalThis.fetch = async (input, init) => {
+    if (String(input).endsWith('/start') && fail) throw new Error('offline');
+    return savedFetch(input, init);
+  };
+  const send = () => fetch(url, {
+    method: 'POST', headers: { origin: new URL(url).origin, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ email: 'user@example.com', csrf }),
+  });
+  assert.equal((await send()).status, 400);
+  assert.equal(h.saved().challengeId, undefined);
+  fail = false;
+  assert.equal((await send()).status, 200);
+  assert.equal(h.state.starts, 1);
+});
+
 test('a real MCP tool call receives progress, a verification notification, and its original browser result', async (t) => {
   const h = setup(t);
   resetManagerForTesting();
@@ -259,3 +350,68 @@ test('a real MCP tool call receives progress, a verification notification, and i
     resetManagerForTesting();
   }
 });
+
+for (const mode of ['auto-decline', 'no-elicitation'] as const) {
+  test(`a real MCP client with ${mode} verifies through the browser before tools can run`, async (t) => {
+    const h = setup(t);
+    setAccessPollIntervalForTesting(2, 20);
+    resetManagerForTesting();
+    const policy = resolvePolicy({ allowDomains: ['example.com'] });
+    const executor = new StubExecutor({ activeUrl: 'https://example.com' });
+    let browserCalls = 0;
+    let prompts = 0;
+    const tabsList = executor.tabsList.bind(executor);
+    executor.tabsList = async () => { browserCalls++; return tabsList(); };
+    configureManager({ policy, makeExecutor: () => executor });
+    const server = createServer('test', policy, (server, _dir, request) => requireAccess(server, h.dataDir, request));
+    const client = new Client({ name: 'verification-test', version: '1' }, {
+      capabilities: mode === 'auto-decline' ? { elicitation: { form: {} } } : {},
+    });
+    if (mode === 'auto-decline') {
+      client.setRequestHandler(ElicitRequestSchema, async () => { prompts++; return { action: 'decline' }; });
+    }
+    const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
+    const call = () => client.callTool({ name: 'tabs_list', arguments: {} });
+    const text = (response: Awaited<ReturnType<typeof call>>) =>
+      (response.content as Array<{ text: string }>).map((part) => part.text).join('\n');
+    try {
+      const blocked = await call();
+      assert.equal(blocked.isError, true);
+      assert.match(text(blocked), /ACCESS_INPUT_REQUIRED/);
+      const url = text(blocked).match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
+      assert.equal(text(await call()), text(blocked), 'retries reuse the same form');
+      assert.equal(prompts, mode === 'auto-decline' ? 1 : 0);
+      assert.equal(browserCalls, 0);
+      assert.equal(h.state.starts, 0);
+
+      const html = await (await fetch(url)).text();
+      const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+      const sent = await fetch(url, {
+        method: 'POST', headers: { origin: new URL(url).origin, 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ email: 'user@example.com', csrf }),
+      });
+      assert.equal(sent.status, 200);
+      assert.match(await sent.text(), /Check your inbox/);
+      const pending = await call();
+      assert.equal(pending.isError, true);
+      assert.match(text(pending), /ACCESS_PENDING/);
+      assert.equal(browserCalls, 0, 'entering an email does not authorize browser access');
+
+      h.state.status = 'approved';
+      await until(() => h.saved().verified === true);
+      const verified = await call();
+      assert.notEqual(verified.isError, true);
+      assert.match(text(verified), /Email verified/);
+      assert.match(text(verified), /https:\/\/example.com/);
+      assert.ok(browserCalls > 0);
+      assert.equal(h.state.starts, 1);
+      assert.equal(h.state.validations, 1);
+      await assert.rejects(fetch(url), 'the local form closes after verification');
+    } finally {
+      await client.close();
+      await server.close();
+      resetManagerForTesting();
+    }
+  });
+}

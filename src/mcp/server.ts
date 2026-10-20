@@ -31,7 +31,7 @@ const SERVER_VERSION = '0.1.0';
  */
 export const SERVER_INSTRUCTIONS =
   "MCP Browser Extension drives the user's real, signed-in Chrome. " +
-  'On the first browser tool call, enter your email in the MCP input prompt and open the sign-in link sent to you. The tool waits for verification, reports the result, and continues automatically on success. If it returns ACCESS_PENDING, call chrome_status again to keep waiting; do not ask for a chat reply or another email. Only ask the user to click Connect if the result says Chrome is not paired. ' +
+  'On the first browser tool call, enter your email in the MCP input prompt and open the sign-in link sent to you. If it returns ACCESS_INPUT_REQUIRED, show the local verification URL to the user so they can enter their email in their browser; do not fill it or read their email for them. The tool waits for verification, reports the result, and continues automatically on success. If it returns ACCESS_PENDING, call chrome_status again to keep waiting; do not ask for a chat reply or another email. Only ask the user to click Connect if the result says Chrome is not paired. ' +
   'Start with chrome_status. If it reports no paired browser (or any tool fails with NO_BACKEND), do not retry: ' +
   'give the user the steps in its `setup` field, which name what went wrong and how to fix it. ' +
   'If a tool fails with POLICY_DENIED because a site is not allowed, ask the user to allow it from the extension\'s ' +

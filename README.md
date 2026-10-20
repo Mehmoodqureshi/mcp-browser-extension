@@ -178,9 +178,17 @@ that address. The waiting tool reports **Email verified** and continues.
 
 If the tool returns `ACCESS_PENDING`, ask the agent to call `chrome_status`
 again to keep waiting on the same link. You do not need another email or a
-verification code. The MCP client must support interactive input prompts
-(MCP elicitation). If no prompt appears, enable interactive prompts in your
-client and retry; installing the extension alone does not activate access.
+verification code.
+
+If your client suppresses the prompt (for example, in YOLO/bypass mode), does
+not support MCP elicitation, or the dialog is dismissed, the tool returns
+`ACCESS_INPUT_REQUIRED` with a temporary local verification link. Open it on
+the computer running the MCP server, enter your email in the browser form,
+and open the sign-in link from your inbox. Then call `chrome_status` to continue.
+The local form expires after 10 minutes; call the tool again for a fresh one.
+Opening the form does not send an email, and access remains blocked until the
+email link and device grant are verified. Installing the extension alone does
+not activate access.
 
 **4. Click Connect if Chrome is not already paired.** A fresh install opens the
 extension's Settings with a
