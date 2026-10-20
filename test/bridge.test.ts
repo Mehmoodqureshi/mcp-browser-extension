@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * Phase 2 verification — the bridge + auth, driven by a fake extension client.
  * Proves: token accept; wrong token / bad version → unauthorized + close 4401;
@@ -89,7 +91,7 @@ class FakeExtension {
 
   hello(token: string, extId = 'ext-a', v: number = PROTOCOL_VERSION): void {
     this.ws.send(
-      JSON.stringify({ type: 'hello', v, token, ext: { id: extId, version: '1.0.0', chrome: '123' } }),
+      JSON.stringify({ type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v, token, ext: { id: extId, version: '1.0.0', chrome: '123' } }),
     );
   }
 
@@ -439,4 +441,19 @@ test('port conflict: start retries and succeeds once the old listener releases t
   } finally {
     await second.stop();
   }
+});
+
+test('an older extension can pair for setup but cannot receive browser commands', async () => {
+  const { server, port } = await startServer();
+  try {
+    const ext = await FakeExtension.open(port);
+    ext.ws.send(JSON.stringify({ type: 'hello', v: PROTOCOL_VERSION, token: TOKEN, ext: { id: 'old', version: '0', chrome: '116' } }));
+    await ext.welcomed;
+    let commands = 0;
+    ext.onCommand = (cmd) => { commands++; ext.result(cmd.id, {}); };
+    await assert.rejects(server.sendCommand('tabs_list', {}), /Update the extension and MCP server together/);
+    assert.equal(commands, 0);
+    await server.sendCommand('ping_probe', {});
+    assert.equal(commands, 1, 'only the data-free health probe reaches an older extension');
+  } finally { await server.stop(); }
 });

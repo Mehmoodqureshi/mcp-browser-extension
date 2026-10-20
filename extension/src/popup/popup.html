@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <title>MCP Browser Extension</title>
+    <link rel="stylesheet" href="activity-dashboard.css" />
     <style>
       :root {
         --bg: #ffffff;
@@ -12,14 +13,15 @@
         --muted: #64748b;
         --line: #e6e8ec;
         --ok: #16a34a;
+        --ok-text: #15803d;
         --ok-soft: #dcfce7;
         --warn: #c2410c;
         --warn-soft: #fff1e6;
         --bad: #dc2626;
-        --accent: oklch(0.58 0.19 255);
+        --accent: oklch(0.56 0.19 255);
         --accent-foreground: oklch(0.99 0 0);
         --accent-2: var(--accent);
-        --ring: oklch(0.58 0.19 255 / 35%);
+        --ring: oklch(0.56 0.19 255 / 35%);
         --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.06);
       }
       @media (prefers-color-scheme: dark) {
@@ -31,6 +33,7 @@
           --muted: #8b93a7;
           --line: #232836;
           --ok: #34d399;
+          --ok-text: #34d399;
           --ok-soft: rgba(52, 211, 153, 0.12);
           --warn: #fb923c;
           --warn-soft: rgba(251, 146, 60, 0.1);
@@ -42,119 +45,194 @@
         }
       }
       * { box-sizing: border-box; }
+      html { width: 360px; min-width: 360px; scrollbar-width: none; }
+      html::-webkit-scrollbar { display: none; }
+      .access-list { scrollbar-color: var(--accent) var(--panel); scrollbar-width: thin; }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: var(--panel); border-radius: 8px; }
+      ::-webkit-scrollbar-thumb { background: var(--accent); border: 2px solid var(--panel); border-radius: 8px; }
       body { margin: 0; width: 360px; font: 13px/1.45 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; background: var(--bg); color: var(--fg); -webkit-font-smoothing: antialiased; }
 
-      /* -- header -- */
-      header { position: relative; display: flex; align-items: center; gap: 11px; padding: 16px 16px 14px; overflow: hidden; }
-      header::before { content: ''; position: absolute; inset: 0; background: radial-gradient(120% 140% at 0% 0%, rgba(59, 130, 246, 0.22), transparent 55%), radial-gradient(90% 120% at 100% 0%, rgba(139, 92, 246, 0.2), transparent 60%); pointer-events: none; }
-      header > * { position: relative; }
-      .logo { width: 34px; height: 34px; border-radius: 10px; overflow: hidden; box-shadow: 0 6px 16px rgba(59, 130, 246, 0.3); }
+      /* Header and connection */
+      header { flex: none; display: flex; align-items: center; gap: 12px; padding: 16px; }
+      .logo { flex: none; width: 34px; height: 34px; border-radius: 10px; overflow: hidden; }
       .logo img { width: 34px; height: 34px; display: block; }
       .title { flex: 1; min-width: 0; }
-      .title b { display: block; font-size: 14px; letter-spacing: -0.01em; }
-      .title span { color: var(--muted); font-size: 12px; }
-      .pill { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); white-space: nowrap; }
-      .dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+      .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+      .title span { display: block; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+      .connection-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .pill { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; font-weight: 500; }
+      .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
       .pill.ok .dot { background: var(--ok); }
-      .pill.ok .dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; background: var(--ok); opacity: 0.35; animation: pulse 1.8s ease-out infinite; }
       .pill.warn .dot { background: var(--warn); }
       .pill.bad .dot { background: var(--bad); }
-      @keyframes pulse { from { transform: scale(0.6); opacity: 0.5; } to { transform: scale(1.6); opacity: 0; } }
+      #connect { flex: none; min-width: 92px; }
+      #connect.secondary { background: var(--panel); color: var(--fg); border-color: var(--line); }
+      .connect #connect-text { margin: 8px 0 0; }
+      .connect.done #connect-text { display: none; }
+      .connect .error { margin: 8px 0 0; color: var(--warn); }
 
-      main { padding: 4px 12px 12px; display: grid; gap: 10px; }
-      .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; box-shadow: var(--shadow); }
-      h2 { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-      .count { font-size: 11px; letter-spacing: 0; text-transform: none; padding: 1px 7px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
-
-      /* -- this site -- */
-      .site { display: flex; align-items: center; gap: 10px; }
-      .avatar { flex: none; width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 15px; color: #fff; text-transform: uppercase; }
-      .site-main { flex: 1; min-width: 0; }
-      .site-host { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .chip { display: inline-flex; align-items: center; gap: 5px; margin-top: 3px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 500; }
-      .chip.ok { color: var(--ok); background: var(--ok-soft); }
-      .chip.warn { color: var(--warn); background: var(--warn-soft); }
-      #site-allow { margin-top: 10px; width: 100%; }
-
-      /* -- lists -- */
+      /* Let Chrome size and scroll the popup document naturally. */
+      main { padding: 0 12px 12px; display: grid; gap: 12px; }
+      .card { min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+      h2 { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--fg); }
+      .count { font-size: 11px; font-weight: 500; padding: 1px 7px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+      .note { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+      .note:empty { display: none; }
+      code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 5px; border-radius: 5px; background: var(--panel); border: 1px solid var(--line); color: var(--fg); }
       ul { list-style: none; margin: 0; padding: 0; }
-      .row { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 4px 6px; margin: 0 -6px; border-radius: 8px; transition: background 0.15s; }
+      .access-list[data-overflow] { max-height: var(--list-height); overflow-y: auto; overflow-x: hidden; padding-right: 10px; scrollbar-gutter: stable; }
+      .access-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .access-list[data-overflow] button:focus-visible { outline-offset: -2px; }
+
+      /* App connections */
+      #client-connections li { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+      #client-connections li:first-child { padding-top: 4px; }
+      #client-connections li:last-child { border-bottom: 0; }
+      .client-info { min-width: 0; display: grid; justify-items: start; gap: 4px; overflow-wrap: anywhere; }
+      .client-info strong { font-size: 13px; font-weight: 600; }
+      .client-info code { display: inline-block; }
+      .client-details { grid-column: 1 / -1; min-width: 0; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+      .client-details summary { width: fit-content; padding: 2px 0; cursor: pointer; }
+      .client-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+      .client-details p { margin: 4px 0; }
+      .client-details code { display: inline-block; margin-top: 4px; }
+      .client-status { color: var(--muted); font-size: 12px; }
+      [data-state="pending"] .client-status { color: var(--warn); }
+      [data-state="approved"] .client-status { color: var(--ok-text); }
+      .client-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      .client-actions:empty { display: none; }
+      #client-connections li[data-state="approved"] { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+      #client-connections li[data-state="approved"] .client-actions { justify-content: end; }
+      #client-connections li[data-state="approved"] .client-actions button { padding: 6px 8px; font-size: 11px; }
+      #client-count[data-pending="true"] { color: var(--warn); background: var(--warn-soft); }
+      #client-note[data-error="true"] { color: var(--warn); }
+      .access-help { border-top: 1px solid var(--line); padding-top: 8px; color: var(--muted); font-size: 12px; }
+      .access-help summary { cursor: pointer; padding: 4px 0; }
+
+      /* Website and feature access */
+      .row { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 0; border-radius: 8px; transition: background 0.15s; }
       .row:hover { background: var(--panel); }
       .row .host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .mini { flex: none; width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-size: 10px; font-weight: 700; color: #fff; text-transform: uppercase; }
-      .tag { color: var(--muted); font-size: 11.5px; white-space: nowrap; }
-      #allowed { max-height: 150px; overflow-y: auto; scrollbar-width: thin; }
-      .blocked { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); background: linear-gradient(180deg, var(--warn-soft), var(--card) 70%); }
-      .blocked h2 { color: var(--warn); }
-      .update { border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, var(--card)), var(--card) 75%); }
-      .update h2 { color: var(--accent); }
-      .update .note { margin: 0 0 10px; color: var(--fg); }
-      .actions { display: flex; gap: 8px; }
-      .actions .primary { flex: 1; }
-      .blocked .row:hover { background: color-mix(in srgb, var(--warn-soft) 70%, transparent); }
+      .tag { color: var(--muted); font-size: 11px; white-space: nowrap; }
+      .blocked { border-color: color-mix(in srgb, var(--warn) 28%, var(--line)); }
+      .blocked .count { color: var(--warn); background: var(--warn-soft); }
+      #extra-permissions-list li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+      #extra-permissions-list li:first-child { padding-top: 0; }
+      #extra-permissions-list li:last-child { padding-bottom: 0; border-bottom: 0; }
+      #extra-permissions-list button { margin-top: 8px; }
+      .site { display: flex; align-items: center; gap: 12px; }
+      .avatar { flex: none; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; font-weight: 600; font-size: 14px; color: #fff; text-transform: uppercase; }
+      .site-main { flex: 1; min-width: 0; }
+      .site-host { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+      .chip.ok { color: var(--ok-text); background: var(--ok-soft); }
+      .chip.warn { color: var(--warn); background: var(--warn-soft); }
+      #site-allow { margin-top: 12px; width: 100%; }
 
-      /* -- buttons -- */
-      button { font: inherit; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; transition: transform 0.08s, background 0.15s, border-color 0.15s, box-shadow 0.15s; }
+      /* Controls */
+      button { min-height: 32px; font: inherit; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
       button:hover { border-color: color-mix(in srgb, var(--fg) 25%, var(--line)); }
-      button:active { transform: translateY(1px); }
-      button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
-      button.primary { border-color: transparent; color: var(--accent-foreground); background: var(--accent); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 28%, transparent); }
+      button:active { background: var(--panel); }
+      button.primary { border-color: transparent; color: var(--accent-foreground); background: var(--accent); }
       button.primary:hover { background: color-mix(in oklch, var(--accent) 88%, var(--fg)); }
       button.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 6px 8px; }
       button.ghost:hover { color: var(--fg); background: var(--panel); }
-
-      /* -- toggle -- */
-      .switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+      button:disabled { cursor: wait; opacity: 0.6; }
+      button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .switch { display: flex; align-items: center; gap: 12px; min-height: 32px; cursor: pointer; user-select: none; font-size: 12px; }
       .switch span { flex: 1; }
       .switch input { appearance: none; flex: none; width: 36px; height: 20px; margin: 0; border-radius: 999px; background: var(--line); position: relative; cursor: pointer; transition: background 0.2s; }
       .switch input::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform 0.2s; }
-      .switch input:checked { background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+      .switch input:checked { background: var(--accent); }
       .switch input:checked::after { transform: translateX(16px); }
-      .switch input:focus-visible { box-shadow: 0 0 0 3px var(--ring); outline: none; }
+      .switch input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-      .note { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-      .note:empty { display: none; }
-      ol { margin: 2px 0 12px; padding-left: 18px; color: var(--muted); }
-      ol li { margin: 3px 0; }
-      code { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 5px; border-radius: 5px; background: var(--panel); border: 1px solid var(--line); color: var(--fg); }
-      .connect .note { margin: 0 0 10px; color: var(--fg); }
-      #connect { width: 100%; padding: 10px 12px; font-size: 13.5px; font-weight: 600; }
-      #connect.secondary { background: var(--panel); color: var(--fg); border-color: var(--line); box-shadow: none; padding: 7px 12px; font-size: 12.5px; font-weight: 500; }
-      .connect .error { margin: 8px 0 0; color: var(--warn); }
-      .connect.done { padding: 10px 12px; }
-      .connect.done .note { display: none; }
-
-      footer { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); }
-      footer a { display: inline-flex; align-items: center; gap: 5px; color: var(--fg); font-weight: 500; text-decoration: none; cursor: pointer; padding: 4px 8px; border-radius: 8px; transition: background 0.15s; }
-      footer a:hover { background: var(--panel); }
+      /* Secondary navigation and update explanation */
+      footer { position: relative; flex: none; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); }
+      footer .footer-link { display: inline-flex; align-items: center; gap: 4px; padding: 4px; border-color: transparent; background: transparent; color: var(--muted); font-size: 11px; }
+      footer .footer-link:hover { color: var(--fg); background: var(--panel); }
+      #settings { color: var(--fg); }
+      .update-help { display: inline-flex; }
+      .update-tooltip { position: absolute; z-index: 10; bottom: 100%; left: 12px; right: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--fg); box-shadow: var(--shadow); font-size: 12px; line-height: 1.5; visibility: hidden; }
+      .update-help:not([data-dismissed]):hover .update-tooltip,
+      .update-help:not([data-dismissed]):focus-within .update-tooltip { visibility: visible; }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { animation: none !important; transition: none !important; }
+      }
 
       [hidden] { display: none !important; }
     </style>
   </head>
-  <body>
+  <body data-view="popup">
     <header>
       <div class="logo"><img src="icon48.png" alt="" /></div>
       <div class="title">
-        <b>MCP Browser Extension</b>
+        <h1>MCP Browser Extension</h1>
         <span id="paired-as">Lets your AI agent use this Chrome</span>
       </div>
-      <span class="pill" id="state"><span class="dot"></span><span id="state-text">…</span></span>
     </header>
 
     <main>
-      <section class="card update" id="update" hidden>
-        <h2 id="update-title">Get automatic updates</h2>
-        <p class="note" id="update-text"></p>
-        <div class="actions">
-          <button class="primary" id="update-store">Install from Chrome Web Store</button>
-          <button class="ghost" id="update-dismiss">Not now</button>
+      <section class="card connect" id="connect-card" aria-label="Browser connection">
+        <div class="connection-row">
+          <span class="pill" id="state"><span class="dot"></span><span id="state-text">…</span></span>
+          <button class="primary" id="connect">Connect</button>
         </div>
+        <p class="note" id="connect-text">Connect to your app to start using this browser.</p>
+        <p class="note error" id="connect-msg" role="status" aria-live="polite"></p>
+        <div class="access-controls">
+          <button id="access-stop">Stop access</button>
+          <button id="access-resume" class="primary" hidden>Resume connection</button>
+        </div>
+        <p class="note" id="access-note" role="status"></p>
       </section>
 
-      <section class="card connect" id="connect-card">
-        <p class="note" id="connect-text">One click: fetches the port and token from your AI client's server and connects.</p>
-        <button class="primary" id="connect">Connect</button>
-        <p class="note error" id="connect-msg"></p>
+      <section class="card" id="clients-section">
+        <h2>App connections <span class="count" id="client-count"></span></h2>
+        <p class="note" id="client-help" hidden>Approve only an app you opened. Match the key shown in your app.</p>
+        <ul id="client-connections" class="access-list" aria-label="App connections"></ul>
+        <p class="note" id="client-note" role="status" aria-live="polite"></p>
+        <details class="access-help" id="client-limits" hidden>
+          <summary>About app access</summary>
+          <p class="note">Each entry is a separate connection. App names are supplied by the app. Access lasts 8 hours. Removing access stops new actions; an action already running may finish.</p>
+        </details>
+      </section>
+
+      <section class="card blocked" id="blocked-section" hidden>
+        <h2>Website access <span class="count" id="blocked-count"></span></h2>
+        <p class="note">Allow lets approved apps read and act here, including sending, deleting and buying. Accept Chrome’s prompt if shown.</p>
+        <ul id="blocked" class="access-list" aria-label="Website access"></ul>
+      </section>
+
+      <section class="card" id="allowed-section" hidden>
+        <h2>Allowed sites <span class="count" id="allowed-count"></span></h2>
+        <p class="note">Approved apps can read and act on these sites. Remove stops new actions.</p>
+        <ul id="allowed" class="access-list" aria-label="Allowed sites"></ul>
+        <p class="note" id="allowed-note"></p>
+      </section>
+
+      <section class="card" id="activity-section">
+        <h2>Recent activity</h2>
+        <ul id="activity-list" class="activity-list" aria-label="Recent activity"></ul>
+        <p class="note" id="activity-note" role="status"></p>
+        <div class="activity-actions">
+          <button id="activity-all">View all in Settings</button>
+          <button id="activity-clear" class="ghost">Clear history</button>
+        </div>
+        <details class="activity-help">
+          <summary>About this history</summary>
+          <p>MCP activity appears automatically. Opening and closing the same tab with the same app share one row. Select a row for the app, key and times.</p>
+          <p>Last 100 requests received by this extension, kept only for this Chrome session. Website names, app keys and results only; no page text or entered values. App names are supplied by the apps.</p>
+          <p>Requests refused by the server may not appear. Interrupted means the result was withheld or unavailable; an action may still have finished.</p>
+        </details>
+      </section>
+
+      <section class="card" id="extra-permissions" hidden>
+        <h2>Extra permissions</h2>
+        <ul id="extra-permissions-list"></ul>
+        <p class="note" id="extra-permissions-note" role="status" aria-live="polite"></p>
       </section>
 
       <section class="card" id="this-site" hidden>
@@ -166,18 +244,8 @@
             <span class="chip" id="site-state"></span>
           </div>
         </div>
+        <p class="note">Allow lets approved apps read and act here, including sending, deleting and buying.</p>
         <button class="primary" id="site-allow" hidden>Allow the agent on this site</button>
-      </section>
-
-      <section class="card blocked" id="blocked-section" hidden>
-        <h2>Blocked just now <span class="count" id="blocked-count"></span></h2>
-        <ul id="blocked"></ul>
-      </section>
-
-      <section class="card" id="allowed-section" hidden>
-        <h2>Allowed sites <span class="count" id="allowed-count"></span></h2>
-        <ul id="allowed"></ul>
-        <p class="note" id="allowed-note"></p>
       </section>
 
       <section class="card">
@@ -187,7 +255,13 @@
 
     <footer>
       <span id="version"></span>
-      <a id="settings">Settings <span aria-hidden="true">→</span></a>
+      <span id="update" hidden>
+        <span class="update-help" id="update-help">
+          <button class="footer-link" id="update-store" aria-label="Get automatic updates from Chrome Web Store" aria-describedby="update-text" hidden>Get automatic updates</button>
+          <span class="update-tooltip" id="update-text" role="tooltip"></span>
+        </span>
+      </span>
+      <button class="footer-link" id="settings">Settings <span aria-hidden="true">→</span></button>
     </footer>
     <script src="popup.js"></script>
   </body>

@@ -23,10 +23,24 @@ client (for example Claude Code or Claude Desktop).
   interface. The server hands it to the AI client you configured.
 - A pairing token and port, stored in the extension's local storage, so the
   server can tell this browser apart from any other local program.
+- Up to 64 client connection records: public signing keys, fingerprints, app-supplied
+  names, approval decisions and expiry times. They stay in this Chrome profile's
+  local storage. Approvals last eight hours; expired records may be removed when
+  a new request arrives. Private signing keys remain in the requesting server
+  session's memory and are never sent to the extension.
 - A random install id, created on first run and sent only to the local server,
   so it can tell two Chrome profiles apart and keep each one's name.
 - The connection state, the profile name you chose or were given, and your
   "Outline the tabs" setting, also in local storage.
+- A persistent stopped-access setting. Stop access disconnects this Chrome
+  profile and revokes its app approvals. Resume connection requires a person
+  to approve each app again; website and proxy settings are preserved.
+- Up to 100 recent extension requests in trusted session storage: time,
+  command name, website hostname or blank-page address, browser-session tab ID, app-supplied name, verified public-key
+  fingerprint and outcome. No full URLs, arguments, typed values, page content,
+  cookies or error-message text is stored in this history. Clear history removes
+  it immediately; Chrome also clears it on browser exit or extension reload.
+  Requests refused by the server before reaching Chrome may be absent.
 - The ids of the tabs it opened itself (numbers only, in session storage that
   Chrome clears when it closes), so it reuses only its own blank tabs and never
   one of yours.
@@ -36,6 +50,9 @@ client (for example Claude Code or Claude Desktop).
   with an Allow button. They stay in local storage until you allow or dismiss
   them. When you click Allow or Remove, that host name is sent to the local
   server only.
+- Up to 100 dismissed website names in local storage, so a dismissed setup
+  suggestion stays hidden. A new request for that site makes it visible again;
+  dismissing a suggestion never grants access.
 
 ## One-click Connect
 
@@ -58,7 +75,8 @@ prompt with the saved credentials and nothing else.
 
 To show which IP sites see, the extension requests `https://ipinfo.io/json`
 (or `https://api.ipify.org` if that fails) when you click Check IP or the
-agent calls `proxy_status`. That request carries nothing but itself; those
+agent calls `proxy_status`, after you have approved the lookup websites using
+Settings → Proxy → Check IP. That request carries nothing but itself; those
 services see the IP it comes from, which is the point of the check. With the
 optional WebRTC setting ticked, the extension also limits WebRTC to proxied
 connections while the proxy is on.
@@ -76,16 +94,32 @@ connections while the proxy is on.
 
 ## Which sites it can touch
 
-Access is decided by the allowlist of the local server: the sites given with
-`--allow-domain`, plus any you allow yourself on the extension's Options page.
-The extension requests access to all URLs only so that allowlist can name any
-site; without a matching entry, no command runs on a page. The AI agent cannot
-add a site: the extension refuses every command aimed at its own pages, so only
-you can click Allow.
+Website access requires both a matching entry in the server allowlist and a
+Chrome permission for that website. Click Allow in the toolbar popup or Settings
+to request both; accept Chrome's prompt if shown. Server flags alone do not
+grant Chrome permission. Remove also removes the corresponding Chrome host grant.
+The extension has no required host permissions and never requests all-site access.
+Upgrades remove inherited blanket host grants, so previously configured websites
+may need your approval again. The extension refuses browser commands aimed at
+its own approval pages.
+
+Allowing a website lets approved apps read and take actions there, including
+sending messages, deleting information and making purchases, subject to configured
+tool permissions. There is no separate approval for each action. Website access
+is remembered until removed; each app still requires its own unexpired approval.
+Removing either access blocks new commands but cannot undo completed actions.
+
+Cookies and downloads require separate optional permissions, offered only when
+needed under Extra permissions. Proxy authentication and IP lookup permissions
+are requested from Settings when you enable those features. Chrome does not allow
+`proxy` or `debugger` to be optional. The latter remains required for screenshots
+and trusted input and still carries Chrome's
+broad warning. The extension checks website permission before debugger use.
+These application checks do not make debugger a host-restricted Chrome API.
 
 ## Data retention
 
-Nothing is retained by the extension beyond the local-storage items above. You
+Nothing is retained by the extension beyond the local and session storage described above. You
 can clear them by removing the extension. Anything the server saves
 (screenshots, downloads, action history, and the sites you allowed from the
 Options page, in `allowed-sites.json`) lives in `~/.mcp-browser-extension` on your own
@@ -97,7 +131,7 @@ This policy covers the extension, which sends browser results to your local
 server and makes the optional proxy IP checks described above. The server
 forwards results to your configured MCP client. If you enable `--http` or
 `--tunnel`, clients with your remote access key can request browser actions and
-receive results within your allowed sites. `--tunnel` uses Cloudflare to expose
+receive results within your allowed sites after you approve each session in Chrome. `--tunnel` uses Cloudflare to expose
 the local HTTP endpoint; its URL includes the access key and must stay private.
 Restart with `--rotate-remote-key` to revoke access.
 

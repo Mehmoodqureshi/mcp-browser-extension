@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * Several mcp-browser-extension servers sharing one Chrome — one per Claude session.
  *   A. a second server on a busy port joins as a peer instead of killing the hub.
@@ -57,7 +59,7 @@ async function extension(port: number, tag: string, profile?: string): Promise<W
     });
   });
   ws.send(JSON.stringify({
-    type: 'hello', v: PROTOCOL_VERSION, token: TOKEN,
+    type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v: PROTOCOL_VERSION, token: TOKEN,
     ext: { id: 'ext', version: '1', chrome: '1' }, ...(profile ? { profile } : {}),
   }));
   await welcomed;
@@ -182,15 +184,19 @@ test('a rename made through a peer lands on the hub', async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await once(ws, 'open');
     ws.send(JSON.stringify({
-      type: 'hello', v: PROTOCOL_VERSION, token: TOKEN,
+      type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v: PROTOCOL_VERSION, token: TOKEN,
       ext: { id: 'ext', version: '1', chrome: '1' }, installId: 'aaaaaaaa-1111-4111-8111-111111111111',
     }));
-    await until(() => hub.hasConnection('default'));
+    ws.on('message', (raw) => {
+      const f = JSON.parse(raw.toString());
+      if (f.type === 'command') ws.send(JSON.stringify({ type: 'result', v: PROTOCOL_VERSION, id: f.id, ok: true, data: {} }));
+    });
+    await until(() => hub.hasConnection('default') && peer.hasConnection('default'));
 
     assert.equal(await peer.renameProfile('default', 'work'), 'work');
     assert.deepEqual(hub.connectedProfiles(), ['work']);
     await until(() => peer.hasConnection('work'));
-    await assert.rejects(peer.renameProfile('nobody', 'x'), /not an automatically named/);
+    await assert.rejects(peer.renameProfile('nobody', 'x'), /Connect an updated browser/);
   } finally {
     await peer.stop();
     await hub.stop();

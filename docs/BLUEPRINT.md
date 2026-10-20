@@ -1,5 +1,10 @@
 # Chrome MCP — Build-Ready Blueprint (v1)
 
+Current client authorization: see [Client approval](CLIENT-APPROVAL.md). The
+extension now requires a separate signed, human-approved session key in addition
+to the transport token. This supersedes descriptions below that treat the
+transport token alone as sufficient authorization.
+
 > An MCP server that lets Claude drive a real Chrome browser. One pluggable
 > `Executor` interface, two backends: an MV3 **extension** (primary, drives the
 > user's real Chrome via `chrome.debugger`/CDP) and a **CDP fallback** (the
@@ -554,7 +559,7 @@ threat** (this tool feeds untrusted page text to an LLM that can call `eval`).
 3. **Origin is NOT a security layer.** Documented as defense-in-depth against *browser-page* attackers only (a web page cannot forge a `chrome-extension://` Origin; a native process can). The token holds independently. We never relax token strength on Origin's account. Never reject a valid-token dev connection solely on Origin mismatch. [RESOLVED — blocker 2, mv3 major Origin]
 4. **No `/connect` HTTP endpoint.** Token bootstrap is the **native-messaging trampoline** reading the 0600 file (the model/attacker can't read it), with a manual file-path-pairing fallback. No race-able network token vendor exists. [RESOLVED — blocker 3]
 5. **Token never logged.** Never on stdout or stderr; only in the 0600 file (mode verified post-write, fail-closed). Any human-readable pairing artifact is also 0600 and short-lived. `policy.test.ts` asserts the token appears on neither stream. `logErr` redacts. [RESOLVED — major 5]
-6. **Default-deny domain policy, ON by default, gating READS too.** `Policy { allowDomains: glob[]; allowEval; allowDownloads; allowAllTabs }`. Absent config → **SAFE DEFAULT**: navigate only to `about:blank` + already-open allowlisted tabs, **eval denied cross-domain, reads (`get_text`/`get_html`/`screenshot`/`eval`) denied outside the allowlist**, downloads off. The shared `evaluatePolicy(url, method, policy)` runs at **both ends** — wrapped server-side as `assertUrlAllowed` in the executor dispatch (both backends), and re-run by the extension router against the policy delivered in `welcome` — before any attach/navigate/eval/read. `--unsafe-all-domains` (= `allowDomains:['*']`) is the loud-logged escape hatch. [RESOLVED — major 4]
+6. **Default-deny domain policy, ON by default, gating READS too.** `Policy { allowDomains: glob[]; allowEval; allowDownloads; allowAllTabs }`. Absent config → **SAFE DEFAULT**: navigate only to `about:blank` + already-open allowlisted tabs, **eval denied cross-domain, reads (`get_text`/`get_html`/`screenshot`/`eval`) denied outside the allowlist**, downloads off. The shared `evaluatePolicy(url, method, policy)` runs at **both ends** — wrapped server-side as `assertUrlAllowed` in the executor dispatch (both backends), and re-run by the extension router against the policy delivered in `welcome` — before any attach/navigate/eval/read. All-site access is unsupported; catch-all entries never grant access and named websites require approval. [RESOLVED — major 4]
 7. **Safe-mode shipped in v1 (not "future").** Default disables `eval` and the entire mutating tool set; `--enable-mutations` / `--unsafe-enable-eval` opt in. `eval`'s effective target origin (the tab's current URL) is allowlist-checked before dispatch. [RESOLVED — major eval]
 8. **Narrowed manifest:** no `<all_urls>`; `host_permissions:[]` + `optional_host_permissions` requested on demand after an explicit user action-click grant before first attach. [RESOLVED — major 4]
 9. **Displacement is a security event:** superseding connects are logged loudly + surfaced in `chrome_status`; the active connection is pinned to the first `hello` ext id and won't be displaced by a different id without re-pair. [RESOLVED — minor 9]

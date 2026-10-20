@@ -1,3 +1,4 @@
+import type { ClientProof } from '../../shared/client-auth';
 /**
  * src/bridge/connection.ts — one authenticated extension connection.
  *
@@ -31,7 +32,7 @@ import { ExecutorError, type ExecutorErrorCodeLocal } from '../executor/types';
 const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 const LONG_METHODS: ReadonlySet<WireMethod> = new Set(['screenshot', 'wait_for', 'navigate', 'download_file', 'fill_form']);
 
-function defaultTimeoutFor(method: WireMethod): number {
+export function defaultTimeoutFor(method: WireMethod): number {
   return LONG_METHODS.has(method) ? 60_000 : 30_000;
 }
 
@@ -73,6 +74,7 @@ interface Pending {
 const MAX_TAB_URL_ENTRIES = 256;
 
 export interface ConnectionDeps {
+  approvalChallenge?: string;
   ws: WebSocket;
   extId: string;
   sessionId: string;
@@ -87,6 +89,7 @@ export interface ConnectionDeps {
 }
 
 export class ExtensionConnection {
+  readonly approvalChallenge?: string;
   readonly extId: string;
   readonly sessionId: string;
   private readonly ws: WebSocket;
@@ -112,6 +115,7 @@ export class ExtensionConnection {
 
   constructor(deps: ConnectionDeps) {
     this.ws = deps.ws;
+    this.approvalChallenge = deps.approvalChallenge;
     this.extId = deps.extId;
     this.sessionId = deps.sessionId;
     this.caps = new Set(deps.caps ?? []);
@@ -132,7 +136,7 @@ export class ExtensionConnection {
   sendCommand(
     method: WireMethod,
     params: Record<string, unknown>,
-    opts?: { tabId?: string; timeoutMs?: number },
+    opts?: { tabId?: string; timeoutMs?: number; authorization?: ClientProof },
   ): Promise<unknown> {
     if (this.closed || this.ws.readyState !== this.ws.OPEN) {
       return Promise.reject(new ExecutorError('EXTENSION_DISCONNECTED', 'extension is not connected'));
@@ -155,6 +159,7 @@ export class ExtensionConnection {
       params,
       tabId: opts?.tabId,
       timeoutMs,
+      authorization: opts?.authorization,
     };
 
     return new Promise<unknown>((resolve, reject) => {

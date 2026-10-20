@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * Automatic profile names — a browser that leaves Profile blank is named by the
  * server from its installId, so a second blank-profile Chrome joins instead of
@@ -51,7 +53,7 @@ class Fake {
     await once(ws, 'open');
     const fake = new Fake(ws, tag);
     ws.send(JSON.stringify({
-      type: 'hello', v: PROTOCOL_VERSION, token: TOKEN,
+      type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v: PROTOCOL_VERSION, token: TOKEN,
       ext: { id: 'same-unpacked-id', version: '1', chrome: '1' }, ...opts,
     }));
     await fake.welcomed;
@@ -177,7 +179,7 @@ test('renameProfile refuses Options-named profiles and names already taken', asy
     await assert.rejects(bridge.renameProfile('work', 'home'), /extension Options/);
     await assert.rejects(bridge.renameProfile('profile-2', 'default'), /already/);
     await assert.rejects(bridge.renameProfile('profile-2', 'work'), /already/);
-    await assert.rejects(bridge.renameProfile('nobody', 'x'), /not an automatically named/);
+    await assert.rejects(bridge.renameProfile('nobody', 'x'), /No browser is paired/);
   } finally {
     await bridge.stop();
   }

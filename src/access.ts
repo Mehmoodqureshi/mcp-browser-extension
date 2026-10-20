@@ -190,7 +190,8 @@ const inputRequired = (url: string): AccessOutcome => ({
   message: '[ACCESS_INPUT_REQUIRED] Complete email verification in the browser form. It opens automatically when the client does not display its email prompt. ' +
     `If no form appeared, open this local page on the computer running MCP Browser Extension:\n${url}\n` +
     'Enter your email there, open the sign-in link from your inbox, and click Verify this device. This page expires in 10 minutes. ' +
-    'Show this link to the user; do not fill the form or open their email for them. After they submit their email, call chrome_status to wait for verification. Access remains blocked until verification succeeds.',
+    'Show this link only as a backup. Do not open it again or ask for the email in chat while this form is active. ' +
+    'Do not fill the form or open their email for them. After they submit their email, call chrome_status to wait for verification. Access remains blocked until verification succeeds.',
 });
 
 function startEmail(server: Server, dataDir: string, state: AccessState, input: string): Promise<AccessCheck> {

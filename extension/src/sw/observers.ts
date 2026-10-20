@@ -14,14 +14,29 @@
 
 import { observerMatches } from '../../../shared/observers';
 import type { WirePolicy } from '../../../shared/protocol';
+import { initializeBrowserPermissions } from './browser-permissions';
 
 const SCRIPT_ID = 'chrome-mcp-observers';
+let updates: Promise<void> = Promise.resolve();
 
 /** Bring the registered script in line with `policy`; never throws. */
-export async function syncObserverScript(policy: WirePolicy | null, log: (m: string) => void): Promise<void> {
+export function syncObserverScript(policy: WirePolicy | null, log: (m: string) => void): Promise<void> {
+  // A stop must win over a registration already waiting on Chrome.
+  updates = updates.then(() => applyObserverScript(policy, log));
+  return updates;
+}
+
+async function applyObserverScript(policy: WirePolicy | null, log: (m: string) => void): Promise<void> {
   try {
+    await initializeBrowserPermissions();
     const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] }).catch(() => []);
-    const wanted = policy ? observerMatches(policy) : [];
+    // Chrome does not consider two separate HTTP/HTTPS grants to contain one
+    // wildcard-scheme pattern. Register the concrete granted schemes instead.
+    const candidates = (policy ? observerMatches(policy) : []).flatMap((pattern) =>
+      pattern.startsWith('*://') ? [`http${pattern.slice(1)}`, `https${pattern.slice(1)}`] : [pattern]);
+    const checks = await Promise.all(candidates.map(async (pattern) =>
+      await chrome.permissions.contains({ origins: [pattern] }) ? pattern : null));
+    const wanted = checks.filter((pattern): pattern is string => pattern !== null);
 
     if (wanted.length === 0) {
       if (existing.length > 0) {

@@ -32,7 +32,7 @@ function textOf(r: CallToolResult): string {
   return block && block.type === 'text' ? block.text : '';
 }
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true, allowDownloads: true };
+const OPEN: Partial<Policy> = { allowDomains: ['anything.test', 'evil.com', 'example.com'], enableMutations: true, allowEval: true, allowDownloads: true };
 
 test('catalog and handlers do not drift', () => {
   assert.doesNotThrow(assertNoDrift);
@@ -83,7 +83,7 @@ test('eval page-throw is {ok:false}, not a tool error', async () => {
 });
 
 test('safe-mode (default policy) blocks eval and mutations', async () => {
-  configure({ allowDomains: ['*'] }, { activeUrl: 'https://example.com' }); // mutations + eval OFF
+  configure({ allowDomains: ['anything.test', 'evil.com', 'example.com'] }, { activeUrl: 'https://example.com' }); // mutations + eval OFF
   const ev = await dispatchToolCall('eval', { expression: '1+1' });
   assert.equal(ev.isError, true);
   assert.match(textOf(ev), /eval is disabled/i);
@@ -97,7 +97,7 @@ test('domain policy denies cross-domain reads', async () => {
   configure({ allowDomains: ['example.com'] }, { activeUrl: 'https://evil.com' });
   const r = await dispatchToolCall('get_text', {});
   assert.equal(r.isError, true);
-  assert.match(textOf(r), /isn't on this browser tool's allowed-sites list/i);
+  assert.match(textOf(r), /Please allow access to/i);
 
   // ...and allows an allowlisted read.
   configure({ allowDomains: ['example.com'] }, { activeUrl: 'https://example.com' });
@@ -123,7 +123,7 @@ test('snapshot is a content read: gated by domain, returns nodes when allowed', 
 });
 
 test('select_option needs values and is a mutation (blocked in safe-mode)', async () => {
-  configure({ allowDomains: ['*'] }, { activeUrl: 'https://example.com' }); // mutations OFF
+  configure({ allowDomains: ['anything.test', 'evil.com', 'example.com'] }, { activeUrl: 'https://example.com' }); // mutations OFF
   const blocked = await dispatchToolCall('select_option', { selector: 'select', values: ['a'] });
   assert.equal(blocked.isError, true);
   assert.match(textOf(blocked), /disabled \(safe-mode\)/i);
@@ -138,7 +138,7 @@ test('select_option needs values and is a mutation (blocked in safe-mode)', asyn
 });
 
 test('storage: get is a read, set requires a key and is a mutation', async () => {
-  configure({ allowDomains: ['*'] }, { activeUrl: 'https://example.com' }); // mutations OFF
+  configure({ allowDomains: ['anything.test', 'evil.com', 'example.com'] }, { activeUrl: 'https://example.com' }); // mutations OFF
   const getOk = await dispatchToolCall('storage', { op: 'get', key: 'k' });
   assert.notEqual(getOk.isError, true); // reads allowed
   const setBlocked = await dispatchToolCall('storage', { op: 'set', key: 'k', value: 'v' });

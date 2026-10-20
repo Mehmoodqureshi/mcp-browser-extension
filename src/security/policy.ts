@@ -29,6 +29,7 @@ import {
   isUrlGated,
   hostOf,
   isDomainAllowed,
+  normalizeDomainPattern,
 } from '../../shared/policy';
 
 // Re-exported so existing server-side importers keep their entry point.
@@ -77,7 +78,7 @@ export const DEFAULT_POLICY: Readonly<Policy> = Object.freeze({
 /** Merge a partial (from a policy file and/or CLI flags) over the safe default. */
 export function resolvePolicy(partial?: Partial<Policy>): Policy {
   return {
-    allowDomains: partial?.allowDomains ?? [...DEFAULT_POLICY.allowDomains],
+    allowDomains: (partial?.allowDomains ?? DEFAULT_POLICY.allowDomains).map(normalizeDomainPattern).filter(Boolean),
     allowEval: partial?.allowEval ?? DEFAULT_POLICY.allowEval,
     allowDownloads: partial?.allowDownloads ?? DEFAULT_POLICY.allowDownloads,
     allowUploads: partial?.allowUploads ?? DEFAULT_POLICY.allowUploads,

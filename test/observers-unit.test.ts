@@ -182,6 +182,6 @@ test('observerMatches: bare hosts, wildcard subdomains, all-domains, and disable
     observerMatches({ allowDomains: ['example.com', '*.github.com', 'example.com'], allowObservers: true } as never),
     ['*://example.com/*', '*://*.github.com/*'],
   );
-  assert.deepEqual(observerMatches({ allowDomains: ['a.com', '*'], allowObservers: true } as never), ['<all_urls>']);
+  assert.deepEqual(observerMatches({ allowDomains: ['a.com', '*'], allowObservers: true } as never), ['*://a.com/*']);
   assert.deepEqual(observerMatches({ allowObservers: true } as never), []);
 });

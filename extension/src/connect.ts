@@ -51,6 +51,13 @@ export async function applyPairing(reply: Extract<PairingReply, { ok: true }>): 
  * the pairing, save it, reconnect. Resolves with a message to show on failure.
  */
 export async function connectWithOneClick(): Promise<{ ok: boolean; message?: string }> {
+  try {
+    return await chrome.runtime.sendMessage({ type: 'connect_with_click' }) ?? { ok: false, message: 'Could not reach the extension.' };
+  } catch { return { ok: false, message: 'Could not reach the extension. Reopen the popup and try again.' }; }
+}
+
+/** The worker keeps the permission request and pairing alive after the popup closes. */
+export async function requestPairingFromClick(): Promise<PairingReply> {
   let granted = false;
   try {
     granted = await chrome.permissions.request({ permissions: ['nativeMessaging'] });
@@ -58,9 +65,5 @@ export async function connectWithOneClick(): Promise<{ ok: boolean; message?: st
     return { ok: false, message: err instanceof Error ? err.message : String(err) };
   }
   if (!granted) return { ok: false, message: 'Chrome needs that permission to fetch the pairing for you. You can also pair by hand in Settings.' };
-  const reply = await fetchPairing();
-  if (!reply.ok) return { ok: false, message: reply.message };
-  await applyPairing(reply);
-  await chrome.runtime.sendMessage({ type: 'reconnect' }).catch(() => undefined);
-  return { ok: true };
+  return fetchPairing();
 }

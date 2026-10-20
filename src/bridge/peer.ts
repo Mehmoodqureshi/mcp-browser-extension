@@ -1,3 +1,4 @@
+import type { ClientProof } from '../../shared/client-auth';
 /**
  * src/bridge/peer.ts — let several mcp-browser-extension servers share one Chrome.
  *
@@ -41,9 +42,10 @@ export interface RelayFrame {
   id: string;
   method: WireMethod;
   params: Record<string, unknown>;
-  opts?: { tabId?: string; timeoutMs?: number; profile?: string };
+  opts?: { tabId?: string; timeoutMs?: number; profile?: string; authorization?: ClientProof };
 }
 export interface PeerRenameFrame {
+  authorization?: ClientProof;
   type: 'peer_rename';
   id: string;
   from: string;
@@ -135,6 +137,7 @@ export class HubLink {
   ): Promise<HubLink | null> {
     return new Promise((resolve) => {
       let settled = false;
+      let joined: HubLink | null = null;
       const ws = new WebSocket(`ws://${host}:${port}`);
       const done = (link: HubLink | null): void => {
         if (settled) return;
@@ -159,8 +162,17 @@ export class HubLink {
         } catch {
           return done(null);
         }
-        if (frame.type !== 'peer_welcome') return done(null); // 'unauthorized' or anything else
-        done(new HubLink(ws, typeof frame.hubPid === 'number' ? frame.hubPid : 0, onClose, onGrant));
+        if (!joined && frame.type === 'peer_welcome') {
+          joined = new HubLink(ws, typeof frame.hubPid === 'number' ? frame.hubPid : 0, onClose, onGrant);
+          return;
+        }
+        if (joined && frame.type === 'peer_state' && Array.isArray(frame.profiles)) {
+          // The first command needs the extension's signing challenge. Do not
+          // report a successful join before the initial browser state arrives.
+          joined.profiles = frame.profiles;
+          return done(joined);
+        }
+        done(null); // unauthorized or an incomplete/incompatible handshake
       };
       ws.on('message', onFirst);
       ws.once('open', () => {
@@ -181,8 +193,8 @@ export class HubLink {
     return this.request({ type: 'relay', id: '', method, params, ...(opts ? { opts } : {}) }, timeoutMs);
   }
 
-  rename(from: string, to: string): Promise<unknown> {
-    return this.request({ type: 'peer_rename', id: '', from, to }, JOIN_TIMEOUT_MS * 2);
+  rename(from: string, to: string, authorization: ClientProof): Promise<unknown> {
+    return this.request({ type: 'peer_rename', id: '', from, to, authorization }, JOIN_TIMEOUT_MS * 2);
   }
 
   /** Tell the hub our gate refused `host`, so it can offer the person an Allow. */

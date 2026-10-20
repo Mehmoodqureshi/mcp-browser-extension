@@ -1,3 +1,4 @@
+import { CLIENT_APPROVAL_CAP } from '../../../shared/client-auth';
 /**
  * extension/src/sw/ws-client.ts — the WebSocket CLIENT half of the bridge.
  *
@@ -14,6 +15,8 @@ import {
   WIRE_CAP_PROXY,
   WIRE_CAP_TAB_URL,
   type CommandFrame,
+  type ErrorFrame,
+  type ResultFrame,
   type HelloFrame,
   type ServerFrame,
   type WirePolicy,
@@ -25,7 +28,7 @@ import {
 export type ConnState = 'idle' | 'connecting' | 'connected' | 'unauthorized' | 'superseded';
 
 export interface WsClientDeps {
-  onCommand: (cmd: CommandFrame) => void;
+  onCommand: (cmd: CommandFrame, reply: (frame: ResultFrame | ErrorFrame) => void) => void;
   onState: (state: ConnState, detail?: string) => void;
   /** Receives the policy the server delivers in `welcome`, for extension-side gating. */
   onPolicy: (policy: WirePolicy) => void;
@@ -48,6 +51,7 @@ function chromeVersion(): string {
 export class WsClient {
   private ws: WebSocket | null = null;
   state: ConnState = 'idle';
+  approvalChallenge = '';
 
   constructor(private readonly deps: WsClientDeps) {}
 
@@ -68,12 +72,15 @@ export class WsClient {
       return;
     }
     this.ws = ws;
+    this.approvalChallenge = crypto.randomUUID();
 
     ws.onopen = (): void => {
+      if (this.ws !== ws) return;
       const hello: HelloFrame = {
         type: 'hello',
         v: PROTOCOL_VERSION,
         token,
+        approvalChallenge: this.approvalChallenge,
         ext: { id: chrome.runtime.id, version: chrome.runtime.getManifest().version, chrome: chromeVersion() },
         profile: profile && profile.trim() ? profile.trim() : undefined,
         installId,
@@ -81,12 +88,13 @@ export class WsClient {
         // This build gates fail-closed and reports tab URLs on results, so the
         // server may skip its pre-flight tabs_list. An older build omits this and
         // the server keeps fetching the URL itself.
-        caps: [WIRE_CAP_TAB_URL, WIRE_CAP_FILL_FORM, WIRE_CAP_PROXY],
+        caps: [WIRE_CAP_TAB_URL, WIRE_CAP_FILL_FORM, WIRE_CAP_PROXY, CLIENT_APPROVAL_CAP],
       };
       ws.send(JSON.stringify(hello));
     };
 
     ws.onmessage = (ev): void => {
+      if (this.ws !== ws) return;
       let frame: ServerFrame;
       try {
         frame = JSON.parse(typeof ev.data === 'string' ? ev.data : '') as ServerFrame;
@@ -110,7 +118,15 @@ export class WsClient {
           this.send({ type: 'pong', v: PROTOCOL_VERSION, ts: frame.ts });
           break;
         case 'command':
-          this.deps.onCommand(frame);
+          if (this.state === 'connected' && frame.v === PROTOCOL_VERSION) {
+            this.deps.onCommand(frame, (result) => {
+              // A command that finishes after reconnect must never send its
+              // page data to the new socket, whose request ids may overlap.
+              if (this.ws === ws && this.state === 'connected' && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify(result));
+              }
+            });
+          }
           break;
         case 'policy':
           // A site was allowed or removed (from this browser's Options or another's).
@@ -125,8 +141,10 @@ export class WsClient {
 
     ws.onclose = (ev): void => {
       const current = this.ws === ws;
-      if (current) this.ws = null;
-      if (current && ev.code === CLOSE_SUPERSEDED) {
+      if (!current) return;
+      this.ws = null;
+      this.approvalChallenge = '';
+      if (ev.code === CLOSE_SUPERSEDED) {
         this.setState('superseded');
         this.deps.log('another browser paired under the same profile name took this connection');
       } else if (this.state !== 'unauthorized' && this.state !== 'superseded') {
@@ -152,6 +170,7 @@ export class WsClient {
       /* ignore */
     }
     this.ws = null;
+    this.approvalChallenge = '';
   }
 
   private setState(state: ConnState, detail?: string): void {

@@ -14,8 +14,10 @@ inside Chrome's own UI (loading the extension, pasting the pairing token).
   fix it. Do not proceed on a broken step.
 - The server is **deny-all by default**: no domains, no clicks, no eval, no
   downloads, no uploads. Ask the human which domains they want to automate and
-  grant only those with `--allow-domain`. Never reach for `--unsafe-all-domains`
-  or `--unsafe-enable-eval` unless the human asks for them by name.
+  grant only those with `--allow-domain`, or let the person allow them from the
+  Chrome extension popup. All-site access is not supported. Remove
+  `--unsafe-all-domains` from older configurations; never replace it with a
+  catch-all pattern. Only enable `--unsafe-enable-eval` if the human asks by name.
 - Never print or log the pairing token. It lives in a 0600 file; show the human
   its path, not its contents.
 - Requires Node 18 or newer (`node --version`) and Chrome 116 or newer.
@@ -140,14 +142,23 @@ If the client suppresses or cannot display the prompt, or it is dismissed,
 the server automatically opens a temporary local browser form and returns
 `ACCESS_INPUT_REQUIRED` with its link. Show the link as a backup if the form
 did not appear on the computer running the server.
+Do not open that link again or ask for the email in chat while the browser form
+is active. An accepted chat email prompt does not open a browser input form;
+repeated tool calls reuse the active prompt or pending verification.
 The human enters their email, opens the sign-in link from their inbox, and clicks
 **Verify this device**. Do not fill
 the form or open their email for them. The form expires after 10 minutes.
 After they submit it, call `chrome_status` to wait for verification.
 YOLO/bypass permission mode does not skip email verification.
 
+Website access also needs Chrome permission. Relay the tool's one-line Allow
+instructions; the person clicks Allow in the popup and accepts Chrome's native
+prompt if shown. A server allow-domain flag does not supply this permission.
+For a blocked optional feature, relay the Extra permissions instructions. Never
+request or grant these permissions through browser automation.
+
 If the human explicitly configured `--no-email-verification`, there is no email
-step; continue to pairing. This option is intended only for trusted local
+step; continue to pairing and Chrome client approval. This option is intended only for trusted local
 clients and cannot be combined with a public tunnel.
 
 Each verification wait lasts up to 45 seconds. If the result says
@@ -164,6 +175,19 @@ may connect automatically. For the Chrome Web Store copy, or whenever Chrome
 is still unpaired, the human clicks **Connect** in the extension popup after
 email verification. If Chrome reports no paired browser, follow that step and
 retry the tool.
+
+When the tool asks for Chrome approval, relay its friendly one-line steps with
+the app name and key fingerprint. They click the extension's toolbar icon, review **App
+connections**, compare the key, then click **Approve for 8 hours**. The same
+controls are in Settings. Never click
+Approve for them or attempt to change the extension's approval storage. Retry
+the tool after they approve. YOLO, bypass-permission mode and
+`--no-email-verification` do not disable this check.
+
+Approval belongs to one app session and one Chrome profile. A restarted MCP
+connection creates a new key; expired access requires approval again. The person
+can revoke one key from the popup or Settings without revoking the others. Update both the
+server and extension; old versions cannot silently bypass this gate.
 
 ## Step 6 — Check the pairing
 

@@ -19,7 +19,7 @@ import { StubExecutor, type StubOptions } from '../src/executor/stub-executor';
 import { resolvePolicy, type Policy } from '../src/security/policy';
 import type { SnapshotNode } from '../src/executor/types';
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true };
+const OPEN: Partial<Policy> = { allowDomains: ['accounts.google.com', 'acme.okta.com', 'app.example.com', 'example.com', 'github.com', 'login.microsoftonline.com'], enableMutations: true, allowEval: true };
 
 function configure(stub: StubOptions = {}): void {
   resetManagerForTesting();

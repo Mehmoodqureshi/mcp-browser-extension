@@ -12,8 +12,7 @@
  *
  * Grants only ever ADD to the flags' list, and only grants can be removed again:
  * a site that came from `--allow-domain` stays until the flags change. A grant
- * is always one concrete host (or `*.host`), never the `*` catch-all — allowing
- * every site stays a deliberate flag (`--unsafe-all-domains`).
+ * is always one concrete host (or `*.host`), never an all-site catch-all.
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -61,7 +60,9 @@ export class SiteGrants {
     private readonly allowDomains: string[],
     private readonly dataDir?: string,
   ) {
-    this.base = new Set(allowDomains.map((d) => d.toLowerCase()));
+    const namedSites = allowDomains.map(normalizeDomainPattern).filter(Boolean);
+    allowDomains.splice(0, allowDomains.length, ...namedSites);
+    this.base = new Set(namedSites);
     for (const site of this.load()) this.add(site);
   }
 

@@ -1,3 +1,8 @@
+import { ClientApprovals, isApprovalPage } from './client-approvals';
+import { CLIENT_STORAGE_KEY, type ClientConnection } from '../../../shared/client-auth';
+import { ACCESS_STOPPED_KEY, ACTIVITY_KEY } from '../../../shared/activity';
+import { AccessSwitch } from './access-switch';
+import { ActivityLog } from './activity';
 /**
  * extension/src/sw/background.ts — the MV3 service-worker entry.
  *
@@ -20,8 +25,11 @@ import { ChromeExecutor } from './executor';
 import { syncObserverScript } from './observers';
 import { TabBorder } from './tab-border';
 import { PROTOCOL_VERSION, type SiteGrantFrame, type WirePolicy } from '../../../shared/protocol';
-import { isDomainAllowed } from '../../../shared/policy';
-import { applyPairing, fetchPairing } from '../connect';
+import { isDomainAllowed, normalizeDomainPattern } from '../../../shared/policy';
+import { FEATURE_REQUESTS_KEY, OPTIONAL_FEATURES, siteOrigins, isGlobalOrigin } from '../../../shared/browser-permissions';
+import { initializeBrowserPermissions, removeGlobalOrigins } from './browser-permissions';
+import { permittedSites } from '../site-access';
+import { applyPairing, fetchPairing, requestPairingFromClick } from '../connect';
 import { PROXY_STORAGE_KEY, applyProxy, onProxyAuth, proxyStatus } from './proxy';
 
 interface PairConfig {
@@ -33,6 +41,8 @@ interface PairConfig {
   installId: string;
 }
 
+let pendingClients = 0;
+let pendingFeatures = 0;
 const KEEPALIVE_ALARM = 'chrome-mcp-keepalive';
 
 /** A site the server refused, kept so the Options page can offer an Allow. */
@@ -50,7 +60,10 @@ let currentPolicy: WirePolicy | null = null;
 
 // The executor reads the live policy so a frame-scoped command can be gated
 // against the FRAME's origin, not just the tab's.
-const executor = new ChromeExecutor(() => currentPolicy);
+const reportBlocked = (host: string, method: string): void => {
+  void rememberBlocked(host, method).catch(() => undefined);
+};
+const executor = new ChromeExecutor(() => currentPolicy, reportBlocked);
 // Outlines the tabs mcp-browser-extension is working in; follows the live policy.
 const border = new TabBorder(() => currentPolicy);
 // --- reconnect backoff --------------------------------------------------------
@@ -62,7 +75,7 @@ let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleReconnect(): void {
-  if (reconnectTimer) return;
+  if (access.stopped || reconnectTimer) return;
   const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
   reconnectAttempt++;
   reconnectTimer = setTimeout(() => {
@@ -78,7 +91,7 @@ function clearReconnect(): void {
 }
 
 const ws = new WsClient({
-  onCommand: (cmd) => void router.dispatch(cmd),
+  onCommand: (cmd, reply) => void router.dispatch(cmd, reply),
   onState: (state) => {
     void persistState(state);
     if (state === 'connected') clearReconnect();
@@ -92,6 +105,15 @@ const ws = new WsClient({
     if (state === 'unauthorized') void adoptBundledPairing().then((took) => (took ? true : healFromHelper()));
   },
   onPolicy: (policy) => {
+    if (access.stopped) return;
+    if (!policy || !Array.isArray(policy.allowDomains) || policy.allowDomains.some((site) => typeof site !== 'string')) {
+      currentPolicy = null;
+      void syncObserverScript(null, (m) => console.debug('[mcp-browser-extension]', m));
+      void chrome.storage.local.set({ allowedSites: [] });
+      return;
+    }
+    // Old servers may still send catch-all entries. They grant nothing here.
+    policy = { ...policy, allowDomains: policy.allowDomains.map(normalizeDomainPattern).filter(Boolean) };
     currentPolicy = policy;
     // The observer hook is registered from the policy, so it covers exactly the
     // allowlisted sites and only when the operator opted in.
@@ -105,10 +127,51 @@ const ws = new WsClient({
   onLatestExtension: (version) => void chrome.storage.local.set({ latestExtension: version }),
   log: (m) => console.debug('[mcp-browser-extension]', m),
 });
+const approvals = new ClientApprovals({
+  read: async () => (await chrome.storage.local.get(CLIENT_STORAGE_KEY))[CLIENT_STORAGE_KEY],
+  write: async (clients) => { await chrome.storage.local.set({ [CLIENT_STORAGE_KEY]: clients }); },
+  challenge: () => ws.approvalChallenge,
+  changed: (clients) => {
+    pendingClients = clients.filter((c) => c.state === 'pending' && c.expiresAt > Date.now()).length;
+    reflectBadge(ws.state);
+  },
+});
+const activity = new ActivityLog({
+  read: async () => (await chrome.storage.session.get(ACTIVITY_KEY))[ACTIVITY_KEY],
+  write: async (entries) => { await chrome.storage.session.set({ [ACTIVITY_KEY]: entries }); },
+});
+let historyHasFailed = false;
+const historyFailed = (): void => {
+  if (historyHasFailed) return;
+  historyHasFailed = true;
+  void chrome.storage.session.set({ activityError: true }).catch(() => undefined);
+};
+const access = new AccessSwitch({
+  read: async () => (await chrome.storage.local.get(ACCESS_STOPPED_KEY))[ACCESS_STOPPED_KEY],
+  write: async (stopped) => { await chrome.storage.local.set({ [ACCESS_STOPPED_KEY]: stopped }); },
+  revoke: () => approvals.revokeAll(),
+  disconnect: () => {
+    clearReconnect();
+    ws.close();
+    ws.state = 'idle';
+    currentPolicy = null;
+    void persistState('idle');
+    void border.clearAll();
+    void syncObserverScript(null, (m) => console.debug('[mcp-browser-extension]', m));
+    void activity.interrupt().catch(historyFailed);
+  },
+});
 const router = new CommandRouter({
+  authorize: (cmd, verified) => approvals.authorize(cmd, verified),
+  access: () => access.check(),
+  activity: () => {
+    const generation = activity.token();
+    return (entry) => { void activity.record(entry, generation).catch(historyFailed); };
+  },
   exec: executor,
   send: (frame) => ws.send(frame),
   getPolicy: () => currentPolicy,
+  onBlocked: reportBlocked,
   log: (m) => console.debug('[mcp-browser-extension]', m),
   border,
 });
@@ -211,9 +274,11 @@ async function getConfig(): Promise<PairConfig | null> {
 
 /** Mirror the live allowlist for the Options page, and drop refused sites it now covers. */
 async function onAllowlist(policy: WirePolicy): Promise<void> {
+  await initializeBrowserPermissions();
+  const effective = { ...policy, allowDomains: await permittedSites(policy.allowDomains) };
   const { blockedSites } = await chrome.storage.local.get('blockedSites');
   const still = (Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : []).filter(
-    (b) => !isDomainAllowed(`https://${b.host}/`, policy),
+    (b) => !isDomainAllowed(`https://${b.host}/`, effective),
   );
   await chrome.storage.local.set({ allowedSites: policy.allowDomains, blockedSites: still });
   pendingBlocked = still.length;
@@ -222,10 +287,12 @@ async function onAllowlist(policy: WirePolicy): Promise<void> {
 
 /** The server refused `host`: list it on the Options page and flag the toolbar icon. */
 async function rememberBlocked(host: string, method: string): Promise<void> {
-  const { blockedSites } = await chrome.storage.local.get('blockedSites');
+  const { blockedSites, dismissedSites } = await chrome.storage.local.get(['blockedSites', 'dismissedSites']);
   const prior = (Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : []).filter((b) => b.host !== host);
   const next = [{ host, method, at: Date.now() }, ...prior].slice(0, MAX_BLOCKED);
-  await chrome.storage.local.set({ blockedSites: next });
+  await chrome.storage.local.set({ blockedSites: next,
+    dismissedSites: (Array.isArray(dismissedSites) ? dismissedSites : []).filter((site) => site !== host),
+  });
   pendingBlocked = next.length;
   reflectBadge(ws.state);
 }
@@ -255,7 +322,13 @@ const BADGE: Record<ConnState, { text: string; color: string; title: string }> =
 };
 
 function reflectBadge(state: ConnState): void {
-  const b = state === 'connected' && pendingBlocked > 0 ? BLOCKED_BADGE : (BADGE[state] ?? BADGE.idle);
+  const b = access.stopped
+    ? { text: 'OFF', color: '#b91c1c', title: 'MCP Browser Extension — access stopped' }
+    : pendingClients > 0
+    ? { text: '?', color: '#b45309', title: 'App connection awaiting approval. Open Settings to review.' }
+    : state === 'connected' && pendingBlocked > 0 ? BLOCKED_BADGE
+    : pendingFeatures > 0 ? { text: '?', color: '#b45309', title: 'Permission needed. Open the extension popup → Extra permissions.' }
+    : (BADGE[state] ?? BADGE.idle);
   // Best-effort: chrome.action may be unavailable in some contexts.
   try {
     void chrome.action.setBadgeText({ text: b.text });
@@ -282,10 +355,14 @@ async function installType(): Promise<string | undefined> {
 
 /** Connect if we have config and aren't already connected (and weren't rejected). */
 async function ensureConnected(): Promise<void> {
+  try { await access.initialize(); }
+  catch { reflectBadge('idle'); return; }
+  if (access.stopped) { reflectBadge('idle'); return; }
   if (ws.isConnected() || ws.state === 'unauthorized' || ws.state === 'superseded') return;
   const cfg = await getConfig();
   if (!cfg) return;
-  ws.connect(cfg.wsPort, cfg.token, cfg.profile, cfg.installId, await installType());
+  const install = await installType();
+  if (!access.stopped) ws.connect(cfg.wsPort, cfg.token, cfg.profile, cfg.installId, install);
 }
 
 // --- keepalive: an awaited extension-API call resets the 30s idle timer -----
@@ -319,11 +396,48 @@ chrome.tabs.onRemoved.addListener((tabId) => void border.closed(tabId));
 // Logs in to the proxy set on the Options page. 'asyncBlocking' because the
 // credentials are read from storage; needs the webRequestAuthProvider permission.
 // (The bundled @types/chrome predates 'asyncBlocking', hence the cast.)
-chrome.webRequest.onAuthRequired.addListener(onProxyAuth, { urls: ['<all_urls>'] }, [
-  'asyncBlocking',
-] as unknown as string[]);
+function syncProxyAuthListener(): void {
+  const event = chrome.webRequest?.onAuthRequired;
+  if (!event) return;
+  void chrome.permissions.contains({ permissions: ['webRequest', 'webRequestAuthProvider'] }).then((granted) => {
+    if (event.hasListener(onProxyAuth)) event.removeListener(onProxyAuth);
+    if (granted) event.addListener(onProxyAuth, { urls: ['http://*/*', 'https://*/*'] }, ['asyncBlocking'] as unknown as string[]);
+  });
+}
+syncProxyAuthListener();
+
+async function permissionsChanged(): Promise<void> {
+  syncProxyAuthListener();
+  await refreshFeatureBadge();
+  if (currentPolicy) {
+    await onAllowlist(currentPolicy);
+    await syncObserverScript(currentPolicy, (m) => console.debug('[mcp-browser-extension]', m));
+  }
+  await border.clearAll();
+}
+let featureBadgeGeneration = 0;
+async function refreshFeatureBadge(): Promise<void> {
+  const generation = ++featureBadgeGeneration;
+  const saved = (await chrome.storage.local.get(FEATURE_REQUESTS_KEY))[FEATURE_REQUESTS_KEY];
+  const requested = Array.isArray(saved) ? saved.filter((p): p is string => typeof p === 'string' && p in OPTIONAL_FEATURES) : [];
+  const missing = await Promise.all(requested.map(async (permission) =>
+    !await chrome.permissions.contains({ permissions: [permission] })));
+  if (generation !== featureBadgeGeneration) return;
+  pendingFeatures = missing.filter(Boolean).length;
+  reflectBadge(ws.state);
+}
+chrome.permissions.onAdded.addListener((permissions) => {
+  void (async () => {
+    if (permissions.origins?.some(isGlobalOrigin)) await removeGlobalOrigins();
+    await permissionsChanged();
+  })().catch((err) => console.warn('[mcp-browser-extension] permission change failed', err));
+});
+chrome.permissions.onRemoved.addListener(() => {
+  void permissionsChanged().catch((err) => console.warn('[mcp-browser-extension] permission change failed', err));
+});
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[FEATURE_REQUESTS_KEY]) void refreshFeatureBadge();
   if (area === 'local' && changes.tabBorder?.newValue === false) void border.clearAll();
   if (area === 'local' && changes[PROXY_STORAGE_KEY]) void syncProxy();
   if (area === 'local' && (changes.wsPort || changes.token || changes.profile)) {
@@ -339,23 +453,122 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Lets the options page trigger an immediate (re)connect after saving config,
 // and carries the popup's and options page's Allow / Remove clicks to the server.
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (msg?.type === 'connect_with_click') {
+    if (!isApprovalPage(sender) || access.stopped) {
+      reply({ ok: false, message: 'Use Resume connection in the extension popup or Settings first.' });
+      return;
+    }
+    // No await before the permission API: messaging carries the click's gesture.
+    void requestPairingFromClick().then(async (result) => {
+      if (!result.ok) { reply(result); return; }
+      if (access.stopped) { reply({ ok: false, message: 'Access is stopped. Use Resume connection first.' }); return; }
+      await applyPairing(result);
+      clearReconnect();
+      ws.close();
+      ws.state = 'idle';
+      await ensureConnected();
+      reply({ ok: true });
+    }).catch(() => reply({ ok: false, message: 'Could not connect. Please try again.' }));
+    return true;
+  }
+  if (msg?.type === 'feature_access') {
+    if (!isApprovalPage(sender) || !Object.hasOwn(OPTIONAL_FEATURES, msg.feature) || typeof msg.allow !== 'boolean') {
+      reply({ ok: false, error: 'Use Extra permissions in the extension popup or Settings.' });
+      return;
+    }
+    const operation = msg.allow ? chrome.permissions.request({ permissions: [msg.feature] })
+      : chrome.permissions.remove({ permissions: [msg.feature] });
+    void operation.then((changed) => reply({ ok: changed || !msg.allow,
+      ...(!changed && msg.allow ? { error: 'No access was added. You can allow it whenever you are ready.' } : {}),
+    }), () => reply({ ok: false, error: 'Could not change this permission. Please try again.' }));
+    return true;
+  }
+  if (['access_stop', 'access_resume', 'activity_clear'].includes(msg?.type)) {
+    if (!isApprovalPage(sender)) {
+      reply({ ok: false, error: 'Use the extension popup or Settings to change browser access or history.' });
+      return;
+    }
+    const operation = msg.type === 'access_stop' ? access.stop()
+      : msg.type === 'access_resume' ? access.resume().then(() => ensureConnected())
+      : activity.clear().then(async () => {
+        await chrome.storage.session.set({ activityError: false });
+        historyHasFailed = false;
+      });
+    void operation.then(() => {
+      reflectBadge(ws.state);
+      reply({ ok: true });
+    }, () => reply({ ok: false, error: msg.type === 'activity_clear'
+      ? 'Could not clear history. Please try again.'
+      : 'Access is blocked in this session, but the setting could not be saved. Try Stop access again before restarting Chrome.' }));
+    return true;
+  }
+  if (msg?.type === 'client_decision') {
+    if (!isApprovalPage(sender) || typeof msg.id !== 'string' || typeof msg.allow !== 'boolean') {
+      reply({ ok: false, error: 'Client approval requires the extension popup or Settings page.' });
+      return;
+    }
+    if (msg.allow && access.stopped) {
+      reply({ ok: false, error: 'Access is stopped. Use Resume connection first, then approve the app.' });
+      return;
+    }
+    void approvals.decide(msg.id, msg.allow).then(
+      () => reply({ ok: true }),
+      (err) => reply({ ok: false, error: err instanceof Error ? err.message : 'Could not save the decision.' }),
+    );
+    return true;
+  }
   if (msg?.type === 'reconnect') {
+    if (!isApprovalPage(sender)) return;
+    if (access.stopped) {
+      reply({ ok: false, error: 'Access is stopped. Use Resume connection in the extension popup or Settings.' });
+      return;
+    }
     clearReconnect();
     ws.close();
     ws.state = 'idle';
     void ensureConnected();
   }
-  if (msg?.type === 'site_grant' && typeof msg.host === 'string') {
+  if (['site_grant', 'site_access'].includes(msg?.type) && typeof msg.host === 'string') {
     // Only this extension's own pages may grant. A script injected into a web
     // page also reports our id, but its url is the page's, never ours.
-    if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL(''))) return;
+    if (!isApprovalPage(sender) || typeof msg.allow !== 'boolean') {
+      reply({ ok: false, error: 'Please approve this website in the extension popup or Settings.' });
+      return;
+    }
     if (!ws.isConnected()) {
       reply({ ok: false, error: 'not connected to the MCP Browser Extension server' });
       return;
     }
-    const frame: SiteGrantFrame = { type: 'site_grant', v: PROTOCOL_VERSION, host: msg.host, allow: msg.allow !== false };
-    ws.send(frame);
-    reply({ ok: true });
+    const origins = siteOrigins(msg.host);
+    if (!origins.length) {
+      reply({ ok: false, error: 'Please enter one website. All-site access is not available.' });
+      return;
+    }
+    // Own the entire operation here: Chrome may close the popup for its prompt.
+    // Invoke request synchronously while the message still carries the user's click.
+    const permission = msg.type === 'site_access' && msg.allow
+      ? chrome.permissions.request({ origins }) : Promise.resolve(true);
+    void (async () => {
+      if (!await permission) {
+        reply({ ok: false, error: 'No access was added. You can click Allow whenever you are ready.' });
+        return;
+      }
+      await initializeBrowserPermissions();
+      if (!origins.length || (msg.allow && !await chrome.permissions.contains({ origins }))) {
+        reply({ ok: false, error: 'Please click Allow for this website and accept Chrome’s permission request.' });
+        return;
+      }
+      if (!msg.allow) await chrome.permissions.remove({ origins });
+      if (!ws.isConnected() || (msg.allow && access.stopped)) {
+        reply({ ok: false, error: 'Access is stopped or disconnected. Reconnect before allowing this website.' });
+        return;
+      }
+      const frame: SiteGrantFrame = { type: 'site_grant', v: PROTOCOL_VERSION, host: normalizeDomainPattern(msg.host), allow: msg.allow };
+      ws.send(frame);
+      if (currentPolicy) await onAllowlist(currentPolicy);
+      reply({ ok: true });
+    })().catch(() => reply({ ok: false, error: 'Could not update this website permission. Please try again.' }));
+    return true;
   }
   // Options page: re-apply after a permission change, and its Check IP button.
   const fromOwnPage = sender.id === chrome.runtime.id && sender.url?.startsWith(chrome.runtime.getURL(''));
@@ -365,12 +578,18 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return true; // reply comes later
   }
   if (msg?.type === 'dismiss_blocked' && typeof msg.host === 'string') {
-    void chrome.storage.local.get('blockedSites').then(async ({ blockedSites }) => {
+    if (!isApprovalPage(sender)) { reply({ ok: false, error: 'Use the extension popup or Settings.' }); return; }
+    const host = normalizeDomainPattern(msg.host);
+    if (!siteOrigins(host).length) { reply({ ok: false, error: 'Invalid website.' }); return; }
+    void chrome.storage.local.get(['blockedSites', 'dismissedSites']).then(async ({ blockedSites, dismissedSites }) => {
       const still = (Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : []).filter((b) => b.host !== msg.host);
-      await chrome.storage.local.set({ blockedSites: still });
+      const dismissed = Array.isArray(dismissedSites) ? dismissedSites.filter((site) => typeof site === 'string' && site !== host) : [];
+      await chrome.storage.local.set({ blockedSites: still, dismissedSites: [...dismissed, host].slice(-100) });
       pendingBlocked = still.length;
       reflectBadge(ws.state);
-    });
+      reply({ ok: true });
+    }).catch(() => reply({ ok: false, error: 'Could not dismiss this website. Please try again.' }));
+    return true;
   }
 });
 
@@ -402,7 +621,21 @@ async function syncProxy(): Promise<void> {
   }
 }
 
+let historyInitialized = false;
 async function bootstrap(): Promise<void> {
+  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+  await chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+  // Remove the display-only requests left by the former per-action review UI.
+  await chrome.storage.session.remove('actionRequests');
+  await access.initialize();
+  if (!historyInitialized) {
+    historyInitialized = true;
+    await activity.interrupt().catch(historyFailed);
+  }
+  await initializeBrowserPermissions();
+  await refreshFeatureBadge();
+  const savedClients = (await chrome.storage.local.get(CLIENT_STORAGE_KEY))[CLIENT_STORAGE_KEY];
+  pendingClients = (Array.isArray(savedClients) ? savedClients as ClientConnection[] : []).filter((c) => c.state === 'pending' && c.expiresAt > Date.now()).length;
   await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
   await syncProxy();
   await reloadIfFilesChanged();

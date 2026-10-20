@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * Phase 3 verification.
  *   A. ExtensionExecutor translates Executor calls into real bridge round-trips,
@@ -41,7 +43,7 @@ class FakeExtension {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await once(ws, 'open');
     const fe = new FakeExtension(ws);
-    ws.send(JSON.stringify({ type: 'hello', v: PROTOCOL_VERSION, token: TOKEN, ext: { id: 'e', version: '1', chrome: '123' } }));
+    ws.send(JSON.stringify({ type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v: PROTOCOL_VERSION, token: TOKEN, ext: { id: 'e', version: '1', chrome: '123' } }));
     await fe.welcomed;
     return fe;
   }

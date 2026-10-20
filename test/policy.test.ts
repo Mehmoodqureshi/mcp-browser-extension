@@ -7,6 +7,9 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import {
@@ -57,13 +60,14 @@ test('reads are gated (reads are the exfil payload)', () => {
   assert.ok(denied(() => assertUrlAllowed('https://evil.com/page', 'screenshot', permissive)));
 });
 
-test('glob domain matching: bare, wildcard subdomain, and star', () => {
+test('domain matching permits named sites and refuses the all-site wildcard', () => {
   assert.ok(isDomainAllowed('https://example.com/x', permissive));
   assert.ok(!isDomainAllowed('https://sub.example.com/x', permissive)); // bare host != subdomain
   assert.ok(isDomainAllowed('https://en.wikipedia.org/wiki/X', permissive)); // *.wikipedia.org
   assert.ok(isDomainAllowed('https://wikipedia.org/X', permissive)); // *.foo also matches apex
   const star = resolvePolicy({ allowDomains: ['*'], enableMutations: true });
-  assert.ok(isDomainAllowed('https://anything.example/', star));
+  assert.ok(!isDomainAllowed('https://anything.example/', star));
+  assert.deepEqual(star.allowDomains, []);
 });
 
 test('allowlist entries pasted as URLs / host:port / paths still match the bare host', () => {
@@ -128,8 +132,7 @@ test('hostOf is defensive against non-URLs', () => {
 
 // --- the gate never evaluates against a fabricated URL ----------------------
 
-// The gate tests install a process-global manager with a deliberately wide-open
-// policy; leaving it standing would hand the next test file an allow-* executor.
+// Do not leave the gate tests' process-global manager installed for other tests.
 after(() => resetManagerForTesting());
 
 function configure(stub: StubOptions): StubExecutor {
@@ -137,9 +140,7 @@ function configure(stub: StubOptions): StubExecutor {
   resetRateLimiter();
   const ex = new StubExecutor(stub);
   configureManager({
-    // Deliberately wide open: if the gate fell back to a placeholder URL it would
-    // PASS here, and the read would run against an origin we never confirmed.
-    policy: resolvePolicy({ allowDomains: ['*'], enableMutations: true }),
+    policy: resolvePolicy({ allowDomains: ['example.com'], enableMutations: true }),
     makeExecutor: () => ex,
   });
   return ex;
@@ -186,7 +187,7 @@ test('a tab that reports no URL is named as such, not blocked as an origin', asy
   assert.equal(r.isError, true);
   assert.match(textOf(r), /reports no URL/i);
   // The old shape: '' fell through and the allowlist denied a nameless host.
-  assert.doesNotMatch(textOf(r), /isn't on this browser tool's allowed-sites list/i);
+  assert.doesNotMatch(textOf(r), /Please allow access to/i);
 });
 
 // --- the gate costs no round-trip when the backend already knows the URL ------
@@ -343,10 +344,10 @@ test('parseArgs: safe defaults and flag overrides', () => {
   assert.equal(def.policy.enableMutations, false);
   assert.equal(def.policy.allowEval, false);
 
-  const loud = parseArgs(['--unsafe-all-domains', '--enable-mutations', '--port', '40000']);
-  assert.deepEqual(loud.policy.allowDomains, ['*']);
-  assert.equal(loud.policy.enableMutations, true);
-  assert.equal(loud.wsPort, 40000);
+  const named = parseArgs(['--allow-domain', 'example.com', '--enable-mutations', '--port', '40000']);
+  assert.deepEqual(named.policy.allowDomains, ['example.com']);
+  assert.equal(named.policy.enableMutations, true);
+  assert.equal(named.wsPort, 40000);
 
   // Extension-only build: the CDP flags are accepted for back-compat but ignored —
   // cdpFallback stays false regardless.
@@ -359,6 +360,19 @@ test('parseArgs: safe defaults and flag overrides', () => {
   assert.equal(pinned.persistToken, true);
 
   assert.throws(() => parseArgs(['--bogus']), /unknown argument/);
+});
+
+test('all-site CLI flags and policy-file aliases cannot enable unrestricted access', () => {
+  assert.throws(() => parseArgs(['--unsafe-all-domains']), /All-site access is no longer supported/);
+  const dir = mkdtempSync(join(tmpdir(), 'mbe-site-policy-'));
+  try {
+    for (const pattern of ['*', '*://*/*', 'https://*/*', 'http://*:8080/path', '<all_urls>', '*.']) {
+      assert.throws(() => parseArgs(['--allow-domain', pattern]), /All-site access is no longer supported/, pattern);
+      const file = join(dir, 'policy.json');
+      writeFileSync(file, JSON.stringify({ allowDomains: [pattern] }));
+      assert.throws(() => parseArgs(['--policy', file]), /All-site access is no longer supported/, pattern);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('toWirePolicy carries allowObservers to the extension and keeps uploadsDir local', () => {

@@ -1,3 +1,10 @@
+import '../client-connections';
+import './access-lists';
+import '../activity-dashboard';
+import { ACCESS_STOPPED_KEY } from '../../../shared/activity';
+import '../extra-permissions';
+import { changeSiteAccess, permittedSites } from '../site-access';
+import { busyButton, renderList } from '../ui-controls';
 /**
  * extension/src/popup/popup.ts — the panel that opens under the toolbar icon.
  *
@@ -9,7 +16,7 @@
  * Options page, one click away.
  */
 
-import { isDomainAllowed } from '../../../shared/policy';
+import { isDomainAllowed, normalizeDomainPattern } from '../../../shared/policy';
 import { STORE_EXTENSION_URL, type WirePolicy } from '../../../shared/protocol';
 import { connectWithOneClick } from '../connect';
 
@@ -23,17 +30,20 @@ interface BlockedSite {
 
 /** Ask the worker to allow or remove a site; it forwards to the local server. */
 async function grant(host: string, allow: boolean): Promise<void> {
-  const res = (await chrome.runtime.sendMessage({ type: 'site_grant', host, allow }).catch(() => null)) as
-    | { ok: boolean; error?: string }
-    | null;
-  $('allowed-note').textContent = res?.ok ? '' : 'Could not reach the MCP Browser Extension server. Is your AI client running?';
+  const res = await changeSiteAccess(host, allow);
+  await render();
+  $('allowed-note').textContent = res.ok ? '' : (res.error ?? 'Could not change website access. Please try again.');
 }
 
-function button(label: string, onClick: () => void, kind: 'primary' | 'ghost' | '' = ''): HTMLButtonElement {
+function button(label: string, onClick: () => unknown | Promise<unknown>, kind: 'primary' | 'ghost' | '' = ''): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
   if (kind) b.className = kind;
-  b.addEventListener('click', onClick);
+  b.addEventListener('click', (event) => {
+    if (event.isTrusted) void busyButton(b, onClick).catch(() => {
+      $('allowed-note').textContent = 'Could not finish that action. Please try again.';
+    });
+  });
   return b;
 }
 
@@ -84,25 +94,37 @@ async function currentHost(): Promise<string | null> {
   }
 }
 
+let renderGeneration = 0;
 async function render(): Promise<void> {
+  const generation = ++renderGeneration;
   const s = await chrome.storage.local.get([
     'connState',
     'pairedProfile',
     'allowedSites',
     'grantedSites',
     'blockedSites',
+    'dismissedSites',
     'tabBorder',
     'latestExtension',
-    'updateDismissedFor',
+    ACCESS_STOPPED_KEY,
   ]);
-  const state = typeof s.connState === 'string' ? s.connState : 'idle';
+  const state = s[ACCESS_STOPPED_KEY] !== undefined && s[ACCESS_STOPPED_KEY] !== false
+    ? 'stopped' : typeof s.connState === 'string' ? s.connState : 'idle';
   const connected = state === 'connected';
-  const allowed = Array.isArray(s.allowedSites) ? (s.allowedSites as string[]) : [];
+  const allowed = Array.isArray(s.allowedSites) ? (s.allowedSites as string[]).map(normalizeDomainPattern).filter(Boolean) : [];
   // null = a server too old for grants, or one run with --no-site-grants.
   const granted = Array.isArray(s.grantedSites) ? (s.grantedSites as string[]) : null;
-  const blocked = Array.isArray(s.blockedSites) ? (s.blockedSites as BlockedSite[]) : [];
-  const canGrant = connected && granted !== null;
+  const permitted = await permittedSites(allowed);
+  const host = connected ? await currentHost() : null;
+  const hostPermitted = host ? (await permittedSites([host])).length > 0 : false;
+  if (generation !== renderGeneration) return;
   const policy = { allowDomains: allowed } as WirePolicy;
+  const pending = Array.isArray(s.blockedSites) ? (s.blockedSites as BlockedSite[]) : [];
+  const blocked = [...new Set([
+    ...pending.filter((b) => !isDomainAllowed(`https://${b.host}/`, { allowDomains: permitted } as WirePolicy)).map((b) => b.host),
+    ...allowed.filter((site) => !permitted.includes(site)),
+  ])].filter((site) => !Array.isArray(s.dismissedSites) || !s.dismissedSites.includes(site));
+  const canGrant = connected && (granted !== null || allowed.length > 0);
 
   // -- status --
   const labels: Record<string, [string, string]> = {
@@ -111,6 +133,7 @@ async function render(): Promise<void> {
     unauthorized: ['Token rejected', 'bad'],
     superseded: ['Name taken', 'bad'],
     idle: ['Not connected', ''],
+    stopped: ['Access stopped', 'bad'],
   };
   const [text, cls] = labels[state] ?? [state, ''];
   $('state-text').textContent = text;
@@ -127,17 +150,16 @@ async function render(): Promise<void> {
   }
   $('connect-card').className = connected ? 'card connect done' : 'card connect';
   $('connect-text').textContent =
-    state === 'unauthorized'
-      ? 'The server has a new token. One click fetches it and reconnects.'
+    state === 'stopped' ? '' : state === 'unauthorized'
+      ? 'The connection needs to be refreshed. Click Connect again.'
       : state === 'superseded'
         ? `Another browser connected as "${typeof s.pairedProfile === 'string' ? s.pairedProfile : 'this profile'}", so this one stepped aside. Give it its own Profile name in Settings.`
-        : "One click: fetches the port and token from your AI client's server and connects.";
+        : 'Connect to your app to start using this browser.';
 
   // -- this site --
-  const host = connected ? await currentHost() : null;
   $('this-site').hidden = !host;
   if (host) {
-    const ok = isDomainAllowed(`https://${host}/`, policy);
+    const ok = hostPermitted && isDomainAllowed(`https://${host}/`, policy);
     $('site-host').textContent = host;
     $('site-host').title = host;
     const avatar = $('site-avatar');
@@ -147,38 +169,31 @@ async function render(): Promise<void> {
     $('site-state').textContent = ok ? '● Agent can use this site' : '● Blocked for the agent';
     $('site-state').className = `chip ${ok ? 'ok' : 'warn'}`;
     $('site-allow').hidden = ok || !canGrant;
-    $('site-allow').onclick = () => void grant(host, true);
+    $('site-allow').onclick = (event) => {
+      if (event.isTrusted) void busyButton($('site-allow') as HTMLButtonElement, () => grant(host, true));
+    };
   }
 
   // -- blocked just now --
-  $('blocked').replaceChildren(
-    ...blocked.map((b) =>
-      row(b.host, [
-        button('Dismiss', () => void chrome.runtime.sendMessage({ type: 'dismiss_blocked', host: b.host }), 'ghost'),
-        button('Allow', () => void grant(b.host, true), 'primary'),
+  renderList($('blocked'), blocked, (host) => host, (host) => host, (host) =>
+      row(host, [
+        button('Dismiss', () => chrome.runtime.sendMessage({ type: 'dismiss_blocked', host }), 'ghost'),
+        button('Allow', () => grant(host, true), 'primary'),
       ]),
-    ),
   );
   $('blocked-section').hidden = !canGrant || blocked.length === 0;
   $('blocked-count').textContent = String(blocked.length);
 
   // -- allowed sites --
-  $('allowed').replaceChildren(
-    ...allowed.map((h) =>
-      h === '*'
-        ? row('Every site', [tag('--unsafe-all-domains')])
-        : granted?.includes(h)
-          ? row(h, [button('Remove', () => void grant(h, false), 'ghost')])
-          : row(h, [tag('server flag')]),
-    ),
+  renderList($('allowed'), permitted, (host) => host, (host) => JSON.stringify([host, granted?.includes(host)]), (h) =>
+      row(h, [...(granted?.includes(h) ? [] : [tag('From setup')]), button('Remove', () => grant(h, false), 'ghost')]),
   );
   $('allowed-section').hidden = !connected;
-  $('allowed-count').textContent = allowed.includes('*') ? 'all' : String(allowed.length);
-  if (connected && allowed.length === 0) $('allowed-note').textContent = 'No sites allowed yet.';
-  else if (connected && granted === null) $('allowed-note').textContent = 'This server takes sites only from its flags.';
+  $('allowed-count').textContent = String(permitted.length);
+  $('allowed-note').textContent = connected && permitted.length === 0 ? 'No sites allowed yet. Click Allow above to give Chrome permission for a website.' : '';
 
   ($('tab-border') as HTMLInputElement).checked = s.tabBorder !== false;
-  void renderUpdate(typeof s.latestExtension === 'string' ? s.latestExtension : null, s.updateDismissedFor);
+  void renderUpdate(typeof s.latestExtension === 'string' ? s.latestExtension : null);
 }
 
 /** Compare dotted versions numerically: >0 when a is newer. */
@@ -194,10 +209,9 @@ function compareVersions(a: string, b: string): number {
 
 /**
  * An unpacked copy never updates through Chrome. Point it at the store copy,
- * which does, saying so more firmly when it is already behind the server's.
- * "Not now" hides it until the next version comes out.
+ * which does, with the explanation and any version notice in a tooltip.
  */
-async function renderUpdate(latest: string | null, dismissedFor: unknown): Promise<void> {
+async function renderUpdate(latest: string | null): Promise<void> {
   const mine = chrome.runtime.getManifest().version;
   // Unpacked builds carry the store key, so ask Chrome how this copy was installed.
   const unpacked = await chrome.management
@@ -205,22 +219,27 @@ async function renderUpdate(latest: string | null, dismissedFor: unknown): Promi
     .then((me) => me.installType === 'development')
     .catch(() => false);
   const behind = latest !== null && compareVersions(latest, mine) > 0;
-  const key = latest ?? mine;
-  $('update').hidden = !unpacked || dismissedFor === key;
-  $('update-title').textContent = behind ? `Update available: ${latest}` : 'Get automatic updates';
+  $('update').hidden = !unpacked;
+  $('update-store').hidden = !unpacked;
   $('update-text').textContent = behind
-    ? `You have ${mine}. This copy was loaded by hand and does not update itself. The Chrome Web Store copy updates automatically.`
+    ? `Update available: ${latest}. You have ${mine}. This copy was loaded by hand and does not update itself. The Chrome Web Store copy updates automatically.`
     : 'This copy was loaded by hand and does not update itself. Install the Chrome Web Store copy to get every update automatically, then remove this one.';
-  $('update-dismiss').onclick = () => void chrome.storage.local.set({ updateDismissedFor: key }).then(render);
 }
 
+const updateHelp = $('update-help');
+updateHelp.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') updateHelp.dataset.dismissed = 'true';
+});
+updateHelp.addEventListener('mouseleave', () => { delete updateHelp.dataset.dismissed; });
+updateHelp.addEventListener('focusout', () => { delete updateHelp.dataset.dismissed; });
 $('update-store').addEventListener('click', () => void chrome.tabs.create({ url: STORE_EXTENSION_URL }));
 
 $('tab-border').addEventListener('change', (e) => {
   void chrome.storage.local.set({ tabBorder: (e.target as HTMLInputElement).checked });
 });
 $('settings').addEventListener('click', () => void chrome.runtime.openOptionsPage());
-$('connect').addEventListener('click', async () => {
+$('connect').addEventListener('click', async (event) => {
+  if (!event.isTrusted) return;
   const btn = $('connect') as HTMLButtonElement;
   btn.disabled = true;
   btn.textContent = 'Connecting…';
@@ -233,9 +252,11 @@ $('connect').addEventListener('click', async () => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes.connState || changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.pairedProfile || changes.latestExtension) {
+  if (changes[ACCESS_STOPPED_KEY] || changes.connState || changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.pairedProfile || changes.latestExtension) {
     void render();
   }
 });
 
 void render();
+chrome.permissions.onAdded.addListener(() => void render());
+chrome.permissions.onRemoved.addListener(() => void render());

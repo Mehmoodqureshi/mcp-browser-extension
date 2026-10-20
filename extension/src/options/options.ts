@@ -1,3 +1,10 @@
+import '../client-connections';
+import '../activity-dashboard';
+import { ACCESS_STOPPED_KEY } from '../../../shared/activity';
+import '../extra-permissions';
+import { changeSiteAccess, permittedSites } from '../site-access';
+import { busyButton, renderList } from '../ui-controls';
+import { normalizeDomainPattern } from '../../../shared/policy';
 /**
  * extension/src/options/options.ts — the manual pairing UI. Persists {wsPort,
  * token} to chrome.storage.local (which the background SW watches) and asks it
@@ -7,6 +14,7 @@
 import { DEFAULT_WS_PORT, type ProxyWireStatus } from '../../../shared/protocol';
 import { connectWithOneClick } from '../connect';
 import { PROXY_STORAGE_KEY, parseProxyConfig, parseProxyLine } from '../../../shared/proxy';
+import { IP_LOOKUP_ORIGINS, PROXY_AUTH_PERMISSIONS } from '../../../shared/browser-permissions';
 
 const portEl = document.getElementById('port') as HTMLInputElement;
 const tokenEl = document.getElementById('token') as HTMLInputElement;
@@ -54,7 +62,8 @@ const quickEl = document.getElementById('quick') as HTMLDivElement;
 const connectEl = document.getElementById('connect') as HTMLButtonElement;
 const connectMsgEl = document.getElementById('connect-msg') as HTMLParagraphElement;
 
-connectEl.addEventListener('click', async () => {
+connectEl.addEventListener('click', async (event) => {
+  if (!event.isTrusted) return;
   connectEl.disabled = true;
   connectEl.textContent = 'Connecting…';
   const res = await connectWithOneClick();
@@ -69,16 +78,20 @@ function render(state: string): void {
   quickEl.hidden = false;
   if (!connectEl.disabled) connectEl.textContent = state === 'connected' ? 'Connect again' : 'Connect';
   const labels: Record<string, string> = {
-    connected: '✅ connected',
+    connected: 'connected',
     connecting: '… connecting',
-    unauthorized: '⛔ rejected (bad/stale token — re-paste)',
-    superseded: '⛔ another browser connected under the same profile name. Type a different Profile name above and Save & connect.',
+    unauthorized: 'rejected (bad/stale token — re-paste)',
+    superseded: 'another browser connected under the same profile name. Type a different Profile name above and Save & connect.',
     idle: '○ not connected',
   };
   statusEl.textContent = `Status: ${labels[state] ?? state}`;
+  void chrome.storage.local.get(ACCESS_STOPPED_KEY).then((saved) => {
+    if (saved[ACCESS_STOPPED_KEY]) statusEl.textContent = 'Status: access stopped';
+  });
 }
 
-saveEl.addEventListener('click', async () => {
+saveEl.addEventListener('click', async (event) => {
+  if (!event.isTrusted) return;
   const wsPort = Number(portEl.value);
   // The token field is never prefilled (it's a secret), so a blank one means
   // "keep the token I already have" — e.g. when only the Profile changes.
@@ -91,8 +104,8 @@ saveEl.addEventListener('click', async () => {
     return;
   }
   await chrome.storage.local.set({ wsPort, token, profile, pairingSource: 'manual' });
-  await chrome.runtime.sendMessage({ type: 'reconnect' }).catch(() => undefined);
-  statusEl.textContent = 'Status: … connecting';
+  const result = await chrome.runtime.sendMessage({ type: 'reconnect' }).catch(() => undefined);
+  statusEl.textContent = result?.ok === false ? `Status: ${result.error}` : 'Status: … connecting';
 });
 
 // -- allowed sites ------------------------------------------------------------
@@ -112,18 +125,19 @@ interface BlockedSite {
 
 /** Send an Allow / Remove to the server through the service worker. */
 async function grant(host: string, allow: boolean): Promise<void> {
-  const res = (await chrome.runtime.sendMessage({ type: 'site_grant', host, allow }).catch(() => null)) as
-    | { ok: boolean; error?: string }
-    | null;
-  sitesNoteEl.textContent = res?.ok
-    ? ''
-    : `Could not reach the MCP Browser Extension server${res?.error ? ` (${res.error})` : ''}. Is your AI client running?`;
+  const res = await changeSiteAccess(host, allow);
+  await renderSites();
+  sitesNoteEl.textContent = res.ok ? '' : (res.error ?? 'Could not change website access. Please try again.');
 }
 
-function button(label: string, onClick: () => void): HTMLButtonElement {
+function button(label: string, onClick: () => unknown | Promise<unknown>): HTMLButtonElement {
   const b = document.createElement('button');
   b.textContent = label;
-  b.addEventListener('click', onClick);
+  b.addEventListener('click', (event) => {
+    if (event.isTrusted) void busyButton(b, onClick).catch(() => {
+      sitesNoteEl.textContent = 'Could not finish that action. Please try again.';
+    });
+  });
   return b;
 }
 
@@ -142,44 +156,43 @@ function tag(text: string): HTMLSpanElement {
   return t;
 }
 
+let sitesGeneration = 0;
 async function renderSites(): Promise<void> {
-  const { allowedSites, grantedSites, blockedSites, connState } = await chrome.storage.local.get([
+  const generation = ++sitesGeneration;
+  const { allowedSites, grantedSites, blockedSites, dismissedSites, connState } = await chrome.storage.local.get([
     'allowedSites',
     'grantedSites',
     'blockedSites',
+    'dismissedSites',
     'connState',
   ]);
-  const allowed = Array.isArray(allowedSites) ? (allowedSites as string[]) : [];
+  const allowed = Array.isArray(allowedSites) ? (allowedSites as string[]).map(normalizeDomainPattern).filter(Boolean) : [];
   // null = a server too old to take grants from here.
   const granted = Array.isArray(grantedSites) ? (grantedSites as string[]) : null;
-  const blocked = Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : [];
+  const permitted = await permittedSites(allowed);
+  if (generation !== sitesGeneration) return;
+  const pending = Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : [];
+  const blocked = [...new Set([...pending.map((b) => b.host), ...allowed.filter((site) => !permitted.includes(site))])]
+    .filter((host) => !permitted.includes(host) && (!Array.isArray(dismissedSites) || !dismissedSites.includes(host)));
 
-  blockedEl.replaceChildren(
-    ...blocked.map((b) =>
-      siteRow(b.host, [
-        tag(b.method ? `blocked ${b.method}` : 'blocked'),
-        button('Allow', () => void grant(b.host, true)),
-        button('Dismiss', () => void chrome.runtime.sendMessage({ type: 'dismiss_blocked', host: b.host })),
+  renderList(blockedEl, blocked, (host) => host, (host) => host, (host) =>
+      siteRow(host, [
+        tag('needs permission'),
+        button('Allow', () => grant(host, true)),
+        button('Dismiss', () => chrome.runtime.sendMessage({ type: 'dismiss_blocked', host })),
       ]),
-    ),
   );
-  blockedWrapEl.hidden = blocked.length === 0 || granted === null;
+  blockedWrapEl.hidden = blocked.length === 0 || connState !== 'connected';
 
-  allowedEl.replaceChildren(
-    ...allowed.map((host) =>
-      host === '*'
-        ? siteRow('Every site', [tag('--unsafe-all-domains')])
-        : granted?.includes(host)
-          ? siteRow(host, [button('Remove', () => void grant(host, false))])
-          : siteRow(host, [tag('set by server flags')]),
-    ),
+  renderList(allowedEl, permitted, (host) => host, (host) => JSON.stringify([host, granted?.includes(host)]), (host) =>
+      siteRow(host, [...(granted?.includes(host) ? [] : [tag('set by server flags')]), button('Remove', () => grant(host, false))]),
   );
   if (connState !== 'connected') {
     sitesNoteEl.textContent = 'Connect to the MCP Browser Extension server to see and change the allowed sites.';
   } else if (granted === null) {
     sitesNoteEl.textContent =
       'This MCP Browser Extension server does not take sites from here (it is older, or runs with --no-site-grants). Use --allow-domain instead.';
-  } else if (allowed.length === 0) {
+  } else if (permitted.length === 0) {
     sitesNoteEl.textContent = 'No sites are allowed yet.';
   } else {
     sitesNoteEl.textContent = '';
@@ -189,25 +202,32 @@ async function renderSites(): Promise<void> {
   newSiteEl.disabled = !canGrant;
 }
 
-addSiteEl.addEventListener('click', () => {
+function addSite(event: Event): void {
+  if (!event.isTrusted) return;
   const host = newSiteEl.value.trim();
   if (!host) return;
   newSiteEl.value = '';
   void grant(host, true);
-});
+}
+addSiteEl.addEventListener('click', addSite);
 newSiteEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') addSiteEl.click();
+  if (e.key === 'Enter') { e.preventDefault(); addSite(e); }
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[ACCESS_STOPPED_KEY]) {
+    void chrome.storage.local.get('connState').then((saved) => render(String(saved.connState ?? 'idle')));
+  }
   if (area === 'local' && changes.connState) render(String(changes.connState.newValue));
   if (area === 'local' && changes.pairedProfile) renderPairedAs(changes.pairedProfile.newValue);
-  if (area === 'local' && (changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.connState)) {
+  if (area === 'local' && (changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.connState)) {
     void renderSites();
   }
 });
 
 void renderSites();
+chrome.permissions.onAdded.addListener(() => void renderSites());
+chrome.permissions.onRemoved.addListener(() => void renderSites());
 
 void loadExisting();
 
@@ -257,7 +277,8 @@ proxyHostEl.addEventListener('change', splitPastedProxy);
 // Split right after a paste too, so the fields show what was understood before Save.
 proxyHostEl.addEventListener('paste', () => setTimeout(splitPastedProxy, 0));
 
-proxyWebrtcEl.addEventListener('change', async () => {
+proxyWebrtcEl.addEventListener('change', async (event) => {
+  if (!event.isTrusted) return;
   // Must run inside the click: Chrome only asks for a permission on a user gesture.
   if (proxyWebrtcEl.checked) {
     proxyWebrtcEl.checked = await chrome.permissions.request({ permissions: ['privacy'] }).catch(() => false);
@@ -270,9 +291,9 @@ proxyWebrtcEl.addEventListener('change', async () => {
   await chrome.runtime.sendMessage({ type: 'proxy_apply' }).catch(() => undefined);
 });
 
-proxySaveEl.addEventListener('click', async () => {
+proxySaveEl.addEventListener('click', async (event) => {
+  if (!event.isTrusted) return;
   splitPastedProxy();
-  const stored = parseProxyConfig((await chrome.storage.local.get(PROXY_STORAGE_KEY))[PROXY_STORAGE_KEY]);
   const host = proxyHostEl.value.trim();
   const port = Number(proxyPortEl.value);
   const enabled = proxyEnabledEl.checked;
@@ -280,18 +301,31 @@ proxySaveEl.addEventListener('click', async () => {
     return proxyNote('Proxy: enter a host and a port (1-65535) first', 'err');
   }
   const username = proxyUserEl.value.trim();
-  // Never prefilled (a secret): blank keeps the saved password while the username stays.
-  const password = proxyPassEl.value || (stored && stored.username === username ? stored.password : '');
   const scheme = proxySchemeEl.value;
   if (enabled && username && scheme.startsWith('socks')) {
     return proxyNote('Proxy: Chrome cannot log in to a SOCKS proxy. Pick HTTP or HTTPS, or use a proxy without a login.', 'err');
   }
+  if (enabled && username && !await chrome.permissions.request({ permissions: PROXY_AUTH_PERMISSIONS }).catch(() => false)) {
+    return proxyNote('Proxy access was not added. Click Save proxy whenever you are ready.', 'err');
+  }
+  const stored = parseProxyConfig((await chrome.storage.local.get(PROXY_STORAGE_KEY))[PROXY_STORAGE_KEY]);
+  // Never prefilled (a secret): blank keeps the saved password while the username stays.
+  const password = proxyPassEl.value || (stored && stored.username === username ? stored.password : '');
   await chrome.storage.local.set({ [PROXY_STORAGE_KEY]: { enabled, scheme, host, port, username, password } });
+  if (!enabled) {
+    // Clear the setting before revoking permission so it cannot remain active.
+    if (await chrome.permissions.contains({ permissions: ['proxy'] })) await chrome.proxy.settings.clear({ scope: 'regular' });
+    await chrome.permissions.remove({ permissions: PROXY_AUTH_PERMISSIONS });
+  }
   proxyPassEl.value = '';
   proxyNote(enabled ? `Proxy: on (${scheme}://${host}:${port}). Click Check IP to confirm.` : 'Proxy: off', enabled ? 'on' : '');
 });
 
-proxyCheckEl.addEventListener('click', async () => {
+proxyCheckEl.addEventListener('click', async (event) => {
+  if (!event.isTrusted) return;
+  if (!await chrome.permissions.request({ origins: IP_LOOKUP_ORIGINS }).catch(() => false)) {
+    return proxyNote('IP lookup permission was not added. You can try again whenever you are ready.', 'err');
+  }
   proxyCheckEl.disabled = true;
   proxyNote('Proxy: checking…');
   const res = (await chrome.runtime.sendMessage({ type: 'proxy_status' }).catch(() => null)) as ProxyWireStatus | null;

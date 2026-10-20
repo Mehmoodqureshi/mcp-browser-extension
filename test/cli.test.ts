@@ -366,14 +366,13 @@ test('--http serves MCP on loopback, prints the connector URL with the key, and 
   const port = await hub(t);
   const httpPort = await freePort();
   const s = sandbox({ MCP_BROWSER_EXTENSION_TOKEN: TOKEN });
-  const p = start(t, [...SERVER_FLAGS, '--port', String(port), '--http', '--http-port', String(httpPort), '--unsafe-all-domains'], s.env);
+  const p = start(t, [...SERVER_FLAGS, '--port', String(port), '--http', '--http-port', String(httpPort)], s.env);
   await p.waitFor('stdout', /Cut everyone off/);
   const key = readFileSync(remoteKeyPath(s.dataDir), 'utf8').trim();
   const out = p.stdout();
   assert.match(out, new RegExp(`serving MCP over HTTP on 127\\.0\\.0\\.1:${httpPort}\\.`));
   assert.ok(out.includes(`  http://127.0.0.1:${httpPort}/mcp/${key}\n`));
   assert.ok(out.includes(`--header "Authorization: Bearer ${key}"`));
-  assert.match(out, /WARNING: --unsafe-all-domains is on/);
   assert.doesNotMatch(out, /tunnel URL changes/);
 
   const base = `http://127.0.0.1:${httpPort}`;

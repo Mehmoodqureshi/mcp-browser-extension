@@ -29,7 +29,8 @@
     "README.md",
     "SETUP.md",
     "LICENSE",
-    "docs/BLUEPRINT.md"
+    "docs/BLUEPRINT.md",
+    "docs/CLIENT-APPROVAL.md"
   ],
   "keywords": [
     "mcp",

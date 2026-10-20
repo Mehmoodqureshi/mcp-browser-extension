@@ -43,7 +43,7 @@ test('browser email form rejects cross-site and malformed submissions, and escap
   assert.equal(failed.status, 400);
   const errorHtml = await failed.text();
   assert.ok(errorHtml.includes('&lt;script&gt;'));
-  assert.ok(!errorHtml.includes('<script>'));
+  assert.ok(!errorHtml.includes('<script>alert("error")</script>'));
   assert.deepEqual(emails, ['user@example.com']);
 });
 
@@ -61,7 +61,7 @@ test('a temporary browser form expires and closes its listener', async () => {
   }
 });
 
-test('concurrent submissions cannot send duplicate verification emails', async (t) => {
+test('concurrent submissions and refreshes share the sent page without duplicate emails', async (t) => {
   let started!: () => void;
   let finish!: () => void;
   const sending = new Promise<void>((resolve) => { started = resolve; });
@@ -82,9 +82,16 @@ test('concurrent submissions cannot send duplicate verification emails', async (
   });
   const first = send();
   await sending;
-  assert.equal((await send()).status, 409);
+  const repeated = send();
+  const refreshed = fetch(prompt.url);
+  await new Promise((resolve) => setTimeout(resolve, 20));
   finish();
-  assert.equal((await first).status, 200);
+  for (const response of await Promise.all([first, repeated, refreshed])) {
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Check your inbox/);
+    assert.doesNotMatch(html, /type="email"/);
+  }
   assert.equal((await send()).status, 200);
   assert.equal(submissions, 1);
 });

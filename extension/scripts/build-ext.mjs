@@ -4,13 +4,14 @@
  */
 import { build } from 'esbuild';
 import { existsSync, mkdirSync, copyFileSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const extRoot = join(here, '..');
 const repoRoot = join(extRoot, '..');
-const outDir = join(repoRoot, 'extension-dist');
+// Isolated review/test builds need not overwrite a folder loaded in the owner's Chrome.
+const outDir = process.env.MBE_EXTENSION_BUILD_DIR ? resolve(process.env.MBE_EXTENSION_BUILD_DIR) : join(repoRoot, 'extension-dist');
 const manifestPath = join(outDir, 'manifest.json');
 // A developer may have loaded this directory before builds acquired a fixed
 // key. Keep that install's identity, including a path-derived (keyless) ID.
@@ -53,6 +54,7 @@ if (previousManifest) {
 }
 copyFileSync(join(extRoot, 'src/options/options.html'), join(outDir, 'options.html'));
 copyFileSync(join(extRoot, 'src/popup/popup.html'), join(outDir, 'popup.html'));
+copyFileSync(join(extRoot, 'src/activity-dashboard.css'), join(outDir, 'activity-dashboard.css'));
 // Icons sit flat in the root: the home-folder mirror copies top-level files only.
 for (const f of readdirSync(join(extRoot, 'icons'))) {
   if (f.endsWith('.png')) copyFileSync(join(extRoot, 'icons', f), join(outDir, f));

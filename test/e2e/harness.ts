@@ -10,7 +10,7 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium, type BrowserContext, type Worker } from 'playwright';
@@ -28,6 +28,7 @@ import { ExtensionExecutor } from '../../src/executor/extension-executor';
 import { configureManager, resetManagerForTesting } from '../../src/executor/manager';
 import { resolvePolicy, toWirePolicy, type Policy } from '../../src/security/policy';
 import { dispatchToolCall, resetRateLimiter, resetWorkTab } from '../../src/mcp/tools';
+import { siteOrigins } from '../../shared/browser-permissions';
 
 /** Fixture pages, keyed by path. Each is a full HTML document. */
 export const PAGES: Record<string, string> = {
@@ -69,6 +70,14 @@ export const PAGES: Record<string, string> = {
   '/bounce': `<!doctype html><title>Bounce</title><body style="margin:0;background:#151515;height:100vh"><iframe src="/slow" style="display:none"></iframe><script>setTimeout(() => location.replace('/bounce-done'), 1000);</script>`,
   '/bounce-done': `<!doctype html><title>Landed</title><body style="margin:0;background:#fff;height:100vh"><h1>LANDED</h1>`,
   '/hang': `<!doctype html><title>Hang</title><button id="spin" onclick="setTimeout(() => { const end = Date.now() + 30000; while (Date.now() < end) {} }, 0)">spin</button>`,
+  '/website-actions': `<!doctype html><title>Website permission fixture</title>
+    <h1>Local website permission test</h1><p>No real messages, deletions or purchases happen here.</p>
+    <div id="count">0</div>
+    <script>window.count = 0; window.effect = () => document.querySelector('#count').textContent = String(++window.count);</script>
+    <button id="send" onclick="effect()">Send message</button>
+    <button id="delete" onclick="effect()">Delete item</button>
+    <button id="buy" onclick="effect()">Buy now</button>
+    <input id="message">`,
 };
 
 function serve(req: IncomingMessage, res: ServerResponse): void {
@@ -105,6 +114,9 @@ export interface Harness {
   bridge: BridgeServer;
   ctx: BrowserContext;
   sw: Worker;
+  approveClient(bridge?: BridgeServer): Promise<void>;
+  /** Real Chrome permission requests, only in this throwaway Chromium profile. */
+  grantBrowserPermissions(request: { permissions?: string[]; origins?: string[] }): Promise<void>;
   /** Call a tool through the dispatcher; returns the raw MCP result. */
   call(tool: string, args?: Record<string, unknown>): Promise<CallToolResult>;
   /** Call a tool and parse its first text block as JSON; throws on a tool error. */
@@ -132,7 +144,7 @@ async function waitFor(predicate: () => boolean, ms: number, label: string): Pro
 
 export async function startHarness(
   overrides: Partial<Policy> = {},
-  browserOptions: { deviceScaleFactor?: number } = {},
+  browserOptions: { deviceScaleFactor?: number; approveClient?: boolean; siteGrants?: boolean; browserPermissions?: boolean; legacyPermissions?: boolean; legacyProxy?: boolean } = {},
 ): Promise<Harness> {
   const page: Server = createServer(serve);
   await new Promise<void>((resolve) => page.listen(0, '127.0.0.1', resolve));
@@ -155,11 +167,30 @@ export async function startHarness(
     ...overrides,
   });
   const token = 'e2e-token';
-  const bridge = new BridgeServer({ token, serverVersion: 'e2e', port: 0, heartbeatMs: 0, policy: toWirePolicy(policy), siteGrants: false });
+  const bridge = new BridgeServer({ token, serverVersion: 'e2e', port: 0, heartbeatMs: 0, policy: toWirePolicy(policy), siteGrants: browserOptions.siteGrants ?? false });
   const port = await bridge.start();
 
-  const extPath = join(process.cwd(), 'extension-dist');
   const userDataDir = mkdtempSync(join(tmpdir(), 'mbe-e2e-chrome-'));
+  const extPath = join(userDataDir, 'fixture-extension');
+  cpSync(process.env.MBE_EXTENSION_BUILD_DIR ?? join(process.cwd(), 'extension-dist'), extPath, { recursive: true });
+  const manifestPath = join(extPath, 'manifest.json');
+  const manifestText = readFileSync(manifestPath, 'utf8');
+  const backgroundPath = join(extPath, 'background.js');
+  const backgroundText = readFileSync(backgroundPath, 'utf8');
+  if (browserOptions.browserPermissions !== false || browserOptions.legacyPermissions) {
+    // Bootstrap an existing Downloads grant using an older install, then restore
+    // the exact production bundle. Native Chrome permission dialogs cannot be
+    // accepted by headless Playwright. This never touches a person's profile.
+    const prior = JSON.parse(manifestText);
+    const legacy = browserOptions.legacyPermissions
+      ? ['cookies', 'downloads', 'webRequest', 'webRequestAuthProvider']
+      : ['downloads'];
+    prior.permissions.push(...legacy);
+    prior.optional_permissions = prior.optional_permissions.filter((p: string) => !legacy.includes(p));
+    if (browserOptions.legacyPermissions) prior.host_permissions = ['<all_urls>'];
+    writeFileSync(manifestPath, JSON.stringify(prior));
+    writeFileSync(backgroundPath, 'chrome.runtime.onInstalled.addListener(() => {});');
+  }
   // Extensions need full Chromium; "chromium" channel runs it in new headless
   // mode, so no window appears on the person's screen during a run.
   const ctx = await chromium.launchPersistentContext(userDataDir, {
@@ -171,17 +202,93 @@ export async function startHarness(
     acceptDownloads: true,
     args: [
       `--disable-extensions-except=${extPath}`, `--load-extension=${extPath}`, '--no-first-run',
+      '--enable-unsafe-extension-debugging',
       ...(browserOptions.deviceScaleFactor ? [`--force-device-scale-factor=${browserOptions.deviceScaleFactor}`] : []),
     ],
   });
+  try {
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent('serviceworker', { timeout: 15_000 });
+  const extensionId = new URL(sw.url()).hostname;
+  if (browserOptions.browserPermissions !== false || browserOptions.legacyPermissions) {
+    await sw.evaluate(({ legacy, proxy }) => (globalThis as unknown as { chrome: { storage: { local: { set(v: unknown): Promise<void> } } } }).chrome.storage.local.set(
+      legacy ? {
+        migrationSentinel: 'keep-existing-settings',
+        ...(proxy ? { proxy: { enabled: true, scheme: 'http', host: '127.0.0.1', port: 9, username: 'fixture', password: 'fixture' } } : {}),
+      } : { optionalBrowserPermissionsV1: true },
+    ), { legacy: browserOptions.legacyPermissions === true, proxy: browserOptions.legacyProxy === true });
+    const previous = sw;
+    writeFileSync(manifestPath, manifestText);
+    writeFileSync(backgroundPath, backgroundText);
+    const loaded = ctx.waitForEvent('serviceworker', { predicate: (worker) => worker !== previous, timeout: 15_000 });
+    const cdp = await ctx.browser()!.newBrowserCDPSession();
+    await cdp.send('Extensions.loadUnpacked', { path: extPath });
+    const wake = await ctx.newPage();
+    await wake.goto(`chrome-extension://${extensionId}/options.html`);
+    await wake.evaluate(() => (globalThis as unknown as { chrome: { runtime: { sendMessage(v: unknown): Promise<unknown> } } }).chrome.runtime.sendMessage({ type: 'reconnect' }));
+    sw = await loaded;
+    await wake.close();
+    await cdp.detach();
+  }
+  // Seed remembered approval for named fixture hosts through Chrome's real
+  // extension settings. No active host permission is added: the product's
+  // trusted Allow click must still call permissions.request successfully.
+  const admin = await ctx.newPage();
+  await admin.goto('chrome://extensions');
+  const fixtureOrigins = [...new Set(['127.0.0.1', 'localhost', ...policy.allowDomains].flatMap(siteOrigins))];
+  for (const host of fixtureOrigins) {
+    await admin.evaluate(([id, host]) => {
+      const c = (globalThis as unknown as { chrome: { developerPrivate: { addHostPermission(id: string, host: string): Promise<void> } } }).chrome;
+      return c.developerPrivate.addHostPermission(id, host);
+    }, [extensionId, host]);
+  }
+  await admin.close();
   await sw.evaluate(
     ([p, t]) =>
       (globalThis as unknown as { chrome: { storage: { local: { set(v: unknown): Promise<void> } } } }).chrome.storage.local.set({ wsPort: p, token: t }),
     [port, token] as [number, string],
   );
   await waitFor(() => bridge.hasActiveExtension(), 15_000, 'extension to pair');
+
+  const grantBrowserPermissions = async (request: { permissions?: string[]; origins?: string[] }): Promise<void> => {
+    const options = await ctx.newPage();
+    try {
+      await options.goto(new URL('options.html', sw.url()).href);
+      await options.waitForFunction(async () => {
+        const c = (globalThis as unknown as { chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } } }).chrome;
+        return (await c.storage.local.get('optionalBrowserPermissionsV1')).optionalBrowserPermissionsV1 === true;
+      });
+      await options.evaluate((request) => {
+        const button = document.createElement('button');
+        button.id = 'fixture-permissions';
+        button.textContent = 'Grant fixture permissions';
+        button.addEventListener('click', async () => {
+          const c = (globalThis as unknown as { chrome: { permissions: { request(request: unknown): Promise<boolean> } } }).chrome;
+          try { button.dataset.result = String(await c.permissions.request(request)); }
+          catch (err) { button.dataset.result = String(err); }
+        });
+        document.body.append(button);
+      }, request);
+      await options.locator('#fixture-permissions').click();
+      await options.waitForFunction(() => document.querySelector<HTMLElement>('#fixture-permissions')?.dataset.result !== undefined);
+      const result = await options.locator('#fixture-permissions').getAttribute('data-result');
+      if (result !== 'true') throw new Error(`fixture Chrome permission request failed: ${result}`);
+    } finally { await options.close(); }
+  };
+  if (browserOptions.browserPermissions !== false) {
+    await grantBrowserPermissions({ origins: policy.allowDomains.flatMap(siteOrigins), permissions: ['cookies', 'downloads'] });
+  }
+
+  const approveClient = async (client = bridge): Promise<void> => {
+    try { await client.sendCommand('ping_probe', { requireClientApproval: true }); }
+    catch (err) { if (!(err instanceof Error) || !err.message.includes('Please approve')) throw err; }
+    const options = await ctx.newPage();
+    await options.goto(new URL('options.html', sw.url()).href);
+    await options.getByRole('button', { name: 'Approve for 8 hours', exact: true }).click();
+    await options.getByRole('button', { name: 'Approve for 8 hours', exact: true }).waitFor({ state: 'hidden' });
+    await options.close();
+  };
+  if (browserOptions.approveClient !== false) await approveClient();
 
   resetManagerForTesting();
   configureManager({ policy, makeExecutor: () => new ExtensionExecutor(bridge) });
@@ -204,6 +311,8 @@ export async function startHarness(
     dataDir,
     uploadsDir,
     bridge,
+    approveClient,
+    grantBrowserPermissions,
     ctx,
     sw,
     call,
@@ -222,4 +331,11 @@ export async function startHarness(
       rmSync(userDataDir, { recursive: true, force: true });
     },
   };
+  } catch (err) {
+    await ctx.close().catch(() => undefined);
+    await bridge.stop().catch(() => undefined);
+    page.close();
+    rmSync(userDataDir, { recursive: true, force: true });
+    throw err;
+  }
 }

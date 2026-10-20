@@ -21,7 +21,7 @@ function configure(policy: Partial<Policy>, stub: StubOptions = {}): void {
   configureManager({ policy: resolvePolicy(policy), makeExecutor: () => new StubExecutor(stub) });
 }
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true, allowDownloads: true };
+const OPEN: Partial<Policy> = { allowDomains: ['evil.com', 'example.com', 'x.test'], enableMutations: true, allowEval: true, allowDownloads: true };
 const TAB = 'extension:stub:1'; // the stub's single tab
 
 function textOf(r: CallToolResult): string {
@@ -138,7 +138,7 @@ test('every sub-op still passes the policy gate — no bypass', async () => {
   });
   const s = summaryOf(r);
   assert.equal(s.results[0].status, 'error');
-  assert.match(allText(r), /isn't on this browser tool's allowed-sites list/i);
+  assert.match(allText(r), /Please allow access to/i);
 });
 
 test('batch cannot be nested', async () => {

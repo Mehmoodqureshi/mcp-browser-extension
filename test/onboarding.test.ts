@@ -10,7 +10,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -100,6 +100,16 @@ test('SiteGrants edits the live array in place, persists, and never touches flag
 
   assert.equal(g.apply('new.com', false), 'new.com');
   assert.deepEqual(live, ['flag.com']);
+});
+
+test('legacy all-site entries in the base policy and saved grants never grant access', () => {
+  const dir = tmp();
+  writeFileSync(join(dir, GRANTS_FILE), JSON.stringify({ sites: ['*', 'https://*/*', 'saved.example'] }));
+  const live = ['*', '*://*/*', 'https://*/*', 'named.example'];
+  const grants = new SiteGrants(live, dir);
+  assert.deepEqual(live, ['named.example', 'saved.example']);
+  assert.deepEqual(grants.list(), ['saved.example']);
+  assert.equal(grants.apply('*', true), null);
 });
 
 test('an Allow from the extension widens the live policy and reaches every browser', async () => {
@@ -369,7 +379,7 @@ test("calls without a tabId go to the agent's own tab, opened in the background"
       return { closed: true, tabId: id };
     },
   });
-  configureManager({ policy: resolvePolicy({ allowDomains: ['*'], enableMutations: true }), makeExecutor: () => ex });
+  configureManager({ policy: resolvePolicy({ allowDomains: ['app.example.com', 'example.com', 'github.com', 'mail.example.com', 'new.com', 'news.ycombinator.com'], enableMutations: true }), makeExecutor: () => ex });
 
   // Before the agent has a tab, a read sees the person's page ("look at this").
   await dispatchToolCall('get_text', {});

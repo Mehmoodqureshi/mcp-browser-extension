@@ -31,18 +31,20 @@ const SERVER_VERSION = '0.1.0';
  */
 export const SERVER_INSTRUCTIONS =
   "MCP Browser Extension drives the user's real, signed-in Chrome. " +
-  'On the first browser tool call, enter your email in the MCP input prompt and open the sign-in link sent to you, then click Verify this device on the website. If it returns ACCESS_INPUT_REQUIRED, the local verification form opens automatically in the browser; also show its URL as a backup so the user can enter their email. Do not fill it or read their email for them. The tool waits for verification, reports the result, and continues automatically on success. If it returns ACCESS_PENDING, call chrome_status again to keep waiting; do not ask for a chat reply or another email. Only ask the user to click Connect if the result says Chrome is not paired. ' +
+  'On the first browser tool call, enter your email in the MCP input prompt and open the sign-in link sent to you, then click Verify this device on the website. If it returns ACCESS_INPUT_REQUIRED, the local verification form opens automatically in the browser; also show its URL as a backup so the user can enter their email. Do not open the backup URL again or add another chat email prompt while that form is active. Do not fill it or read their email for them. The tool waits for verification, reports the result, and continues automatically on success. If it returns ACCESS_PENDING, call chrome_status again to keep waiting; do not ask for a chat reply or another email. Only ask the user to click Connect if the result says Chrome is not paired. ' +
+  'When Chrome approval is required, show the app name and key fingerprint and ask the person to review App connections in the extension popup or Settings. Approval lasts eight hours. Never approve a client yourself; YOLO and email-verification bypass do not bypass Chrome approval. ' +
   'Start with chrome_status. If it reports no paired browser (or any tool fails with NO_BACKEND), do not retry: ' +
   'give the user the steps in its `setup` field, which name what went wrong and how to fix it. ' +
   'If a tool fails with POLICY_DENIED because a site is not allowed, ask the user to allow it from the extension\'s ' +
-  'toolbar icon (its popup has an Allow button). It applies at once, with no restart. You cannot approve a site yourself. ' +
+  'toolbar icon (its popup has an Allow button). Relay the friendly one-line approval steps from the error and wait for the person. It applies at once, with no restart. You cannot approve a site yourself or enable all-site access. ' +
   "Work in your own tab: tab_new opens one in the background, and calls without a tabId go to it, never to the tab the user is on. " +
   "To act on the user's current page, pass its tabId from tabs_list.";
 
 const LOCAL_BYPASS_INSTRUCTIONS =
   'Email verification is disabled by the local operator for this server. Only trusted local MCP clients should connect; the browser-domain allowlist and other capability safety gates remain active. ' +
+  'When Chrome approval is required, show the app name and key fingerprint and ask the person to review App connections in the extension popup or Settings. Approval lasts eight hours. Never approve a client yourself; YOLO and email-verification bypass do not bypass Chrome approval. ' +
   'Start with chrome_status. If it reports no paired browser (or any tool fails with NO_BACKEND), give the user the steps in its `setup` field. ' +
-  'If a tool fails with POLICY_DENIED because a site is not allowed, ask the user to allow it from the extension\'s toolbar icon. ' +
+  'If a tool fails with POLICY_DENIED because a site is not allowed, relay its friendly one-line approval steps and wait for the person to allow it from the extension\'s toolbar icon. Never approve it yourself or enable all-site access. ' +
   "Work in your own tab: tab_new opens one in the background. To act on the user's current page, pass its tabId from tabs_list.";
 
 /** Default version reported when no explicit version is passed in (legacy callers/tests). */

@@ -14,12 +14,11 @@
 
 import {
   type CommandFrame,
-  type ExecutorErrorCode,
   type FillFieldOp,
   type WireMethod,
   type WirePolicy,
 } from '../../../shared/protocol';
-import { evaluatePolicy } from '../../../shared/policy';
+import { evaluatePolicy, isDomainAllowed, hostOf } from '../../../shared/policy';
 import { runFillFields } from '../../../shared/fill-form';
 import { sanitizeDownloadName } from '../../../shared/download';
 import { collectSnapshot } from '../../../shared/snapshot';
@@ -36,16 +35,10 @@ import {
 } from '../../../shared/screenshot';
 import { KeyedMutex } from '../../../shared/mutex';
 import { proxyStatus } from './proxy';
+import { requireSitePermission, requireFeaturePermission } from './browser-permissions';
 
-/** A command failure carrying a wire error code. */
-export class CmdError extends Error {
-  constructor(
-    public readonly code: ExecutorErrorCode,
-    message: string,
-  ) {
-    super(message);
-  }
-}
+import { CmdError } from './cmd-error';
+export { CmdError } from './cmd-error';
 
 /** Max time we wait for a download to finish before reporting failure. */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -161,6 +154,7 @@ const TABLESS: ReadonlySet<WireMethod> = new Set<WireMethod>(['tabs_list', 'tab_
  * a baffling policy denial against an empty URL.
  */
 export async function resolveTab(cmd: CommandFrame): Promise<number | null> {
+  if (cmd.method === 'download_file' && typeof cmd.params.url !== 'string') return targetTab(cmd);
   if (TABLESS.has(cmd.method)) return null;
   return targetTab(cmd);
 }
@@ -538,6 +532,7 @@ async function withDebugger<T>(
   return locks.run(`dbg:${tabId}`, async () => {
     const target: chrome.debugger.Debuggee = { tabId };
     const once = async (): Promise<T> => {
+      await requireSitePermission((await chrome.tabs.get(tabId)).url ?? '');
       await ensureAttached(tabId);
       return fn(target);
     };
@@ -827,7 +822,10 @@ export class ChromeExecutor {
    * allowlisted page embedding a third-party iframe is the ordinary case, not an
    * exotic one.
    */
-  constructor(private readonly getPolicy: () => WirePolicy | null = () => null) {}
+  constructor(
+    private readonly getPolicy: () => WirePolicy | null = () => null,
+    private readonly onBlocked?: (host: string, method: string) => void,
+  ) {}
 
   /** The absolute URL a link (or img/source) element points at, for a download
    *  by element. Gated like a download by URL: the router only checked the tab
@@ -853,7 +851,7 @@ export class ChromeExecutor {
       frameIds,
     );
     if (!url) throw new CmdError('DOWNLOAD_FAILED', `the element ${sel} has no href or src to download`);
-    this.assertAllowed(url, 'download_file');
+    await this.assertAllowed(url, 'download_file');
     return url;
   }
 
@@ -863,10 +861,20 @@ export class ChromeExecutor {
   }
 
   /** Gate a URL the router could not see (it gates the tab, not arguments). */
-  private assertAllowed(url: string, method: WireMethod): void {
+  private async assertAllowed(url: string, method: WireMethod): Promise<void> {
     const policy = this.getPolicy();
     const verdict = policy ? evaluatePolicy(url, method, policy) : { ok: false as const, reason: 'no policy has arrived yet' };
-    if (!verdict.ok) throw new CmdError('POLICY_DENIED', verdict.reason);
+    if (!verdict.ok) {
+      const host = hostOf(url);
+      if (policy && host && !isDomainAllowed(url, policy)) this.onBlocked?.(host, method);
+      throw new CmdError('POLICY_DENIED', verdict.reason);
+    }
+    try { await requireSitePermission(url); }
+    catch (err) {
+      const host = hostOf(url);
+      if (host) this.onBlocked?.(host, method);
+      throw err;
+    }
   }
 
   /**
@@ -949,7 +957,7 @@ export class ChromeExecutor {
       case 'tab_new': {
         const url = typeof cmd.params.url === 'string' ? cmd.params.url : undefined;
         // Opening at a URL loads it like navigate: the URL must be allowed.
-        if (url !== undefined) this.assertAllowed(url, 'navigate');
+        if (url !== undefined) await this.assertAllowed(url, 'navigate');
         // Focus the new tab by default (so "open X" behaves like opening a link);
         // batch/parallel callers pass active:false to avoid fighting over focus.
         const active = cmd.params.active !== false;
@@ -1131,7 +1139,8 @@ export class ChromeExecutor {
         const url = typeof cmd.params.url === 'string' ? cmd.params.url : t.url;
         if (!url) throw new CmdError('BAD_ARGS', 'no url to read cookies for');
         // The router gated the tab; cookies for another URL are that site's.
-        if (url !== t.url) this.assertAllowed(url, 'get_cookies');
+        if (url !== t.url) await this.assertAllowed(url, 'get_cookies');
+        await requireFeaturePermission('cookies');
         const cookies = await chrome.cookies.getAll({ url });
         return {
           cookies: cookies.map((c) => ({
@@ -1355,7 +1364,7 @@ export class ChromeExecutor {
           const at = (await chrome.tabs.get(id)).url;
           // The gate checked the URL the call started on; a redirect since may
           // have landed somewhere that is not allowed.
-          if (at) this.assertAllowed(at, 'screenshot');
+          if (at) await this.assertAllowed(at, 'screenshot');
           const shot = await screenshotViaDebugger(id, fullPage, enc, selector, frameIds).catch(async (err: unknown) => {
             if (!(await pageMoved(id, at))) throw err;
             return null; // the page navigated under the capture
@@ -1363,7 +1372,7 @@ export class ChromeExecutor {
           if (shot && !(await pageMoved(id, at))) return shot;
           await waitForSettled(id, SETTLE_QUIET_MS);
           const now = (await chrome.tabs.get(id)).url;
-          if (now) this.assertAllowed(now, 'screenshot');
+          if (now) await this.assertAllowed(now, 'screenshot');
           return await screenshotViaDebugger(id, fullPage, enc, selector, frameIds);
         };
         try {
@@ -1430,6 +1439,8 @@ export class ChromeExecutor {
       //    the absolute on-disk path so the server can relocate it. --
       case 'download_file': {
         const url = typeof cmd.params.url === 'string' ? cmd.params.url : await this.linkTarget(cmd);
+        await this.assertAllowed(url, 'download_file');
+        await requireFeaturePermission('downloads');
         const name = sanitizeDownloadName(
           typeof cmd.params.suggestedName === 'string' ? cmd.params.suggestedName : undefined,
         );

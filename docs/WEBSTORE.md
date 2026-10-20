@@ -43,6 +43,8 @@ Safety
 - The server is deny-all by default. You choose which domains the agent may touch; everything else is refused before a command runs.
 - Clicking and typing, downloads, uploads, and script evaluation are each separate opt-ins on the server.
 - Every call is recorded to a local history file so you can see what the agent did afterwards.
+- Recent activity in the popup and Settings shows up to 100 extension requests during the current Chrome session, without page text or entered values.
+- Stop access disconnects all apps in this Chrome profile and stays stopped across restarts. Resume connection requires fresh app approval. An action already running may finish.
 - The cookie-reading tool hides cookie values by default; exposing them requires an explicit server setting.
 
 Setup
@@ -77,21 +79,22 @@ Source, docs, and issues: https://github.com/Mehmoodqureshi/mcp-browser-extensio
 **Permission justifications:**
 - `tabs`: list, open, close and switch tabs on the server's instruction.
 - `scripting`: run the read and interaction commands (text, HTML, click, type) inside allowlisted pages, and draw the optional outline that marks tabs the agent is working in (a user stylesheet, removed when the agent stops or the server disconnects).
-- `downloads`: save files the server asks for into the local task folder.
-- `storage`: keep the pairing token, a random install id (sent only to the local server), the ids of tabs it opened (session storage, so it never reuses one of the user's tabs), connection state, profile name, the user's "Outline the tabs" setting, and the local server's allowed sites plus up to ten recently refused host names, so the Options page can offer an Allow button. Nothing in storage leaves the computer.
+- `downloads` (optional): requested from Extra permissions when a download is needed; saves files from approved websites into the local task folder.
+- `storage`: keep the pairing token, a random install id (sent only to the local server), the ids of tabs it opened (session storage, so it never reuses one of the user's tabs), connection state, profile name, the user's "Outline the tabs" setting, app approval records, the durable Stop access setting, and the local server's allowed sites plus up to ten recently refused host names. Trusted session storage also holds up to 100 recent request summaries (time, command, hostname, app name/key and outcome), with no page text, entered values or full URLs. Clear history removes those summaries; Chrome clears them on exit or extension reload. Nothing in storage leaves the computer.
 - `alarms`: a 30-second keepalive so the service worker stays connected.
-- `cookies`: read cookies of allowlisted sites when the server asks, so the agent can use existing sessions.
+- `cookies` (optional): requested from Extra permissions when a cookie read is needed. Only approved websites can be read; the server separately controls whether values may be returned.
 - `webNavigation`: know when a navigation the server triggered has committed or finished loading, so `navigate` / `reload` / `back` / `forward` return as soon as the page is ready instead of polling. Never used to observe browsing the server did not request.
 - `debugger`: trusted OS-level input on framework-controlled inputs and screenshots of a specific tab without focusing it. Attached only for those commands and detached afterwards.
 - `nativeMessaging` (optional, requested only when the user clicks Connect): fetch the port and token from the local MCP Browser Extension server's helper, so pairing is one click instead of copying a token. The helper runs on the user's computer, is registered by the server the user installed, and only answers the pairing.
-- `proxy`: route this Chrome profile through a proxy the user types on the Options page (off by default). Chrome applies a proxy to a whole profile, so users set it in a profile kept for agent work. Never set by the agent or the server; the agent can only read whether it is on.
-- `webRequest` + `webRequestAuthProvider`: answer the login prompt of that user-configured proxy with the username and password the user saved. Only proxy challenges (`isProxy`) from the configured proxy host are answered; every other request is left untouched.
+- `proxy`: Chrome does not support this as an optional permission. Proxy routing is off until the person saves an enabled proxy in Settings, and applies to the whole profile. Never set by the agent or server.
+- `webRequest` + `webRequestAuthProvider` (optional): requested when the person saves a proxy with a username. Only proxy challenges (`isProxy`) from the configured host are answered. Chrome also limits these events to granted hosts; it may ask the person to log in on other sites.
 - `privacy` (optional, requested only when the user ticks "Stop WebRTC from revealing the real IP"): set WebRTC to proxied connections only while the proxy is on.
-- `host_permissions <all_urls>`: the server's domain allowlist decides which sites may be touched; the extension needs the broad grant so that allowlist can name any site. No command runs on a page that is not allowlisted.
+- No required host permissions. `optional_host_permissions` declares HTTP and HTTPS sites so a person can click Allow to request a named website. No all-site request is made. The website must pass both the server allowlist and Chrome permission checks. Remove also removes Chrome's corresponding grant.
+- `debugger` remains required because Chrome does not support it as an optional permission. It carries a broad Chrome warning; the command router and debugger entry point check website permission before use. This is an application-enforced restriction for debugger operations, not a Chrome sandbox boundary.
 
 **Remote code:** No. All code is bundled.
 
-**Proxy (0.9.22):** the proxy host, port, username and password stay in the extension's local storage in that Chrome profile and are never sent to the server. To show which IP sites see, the extension fetches `https://ipinfo.io/json` (falling back to `https://api.ipify.org`) only when the user clicks Check IP or the agent calls `proxy_status`.
+**Proxy:** the proxy host, port, username and password stay in this Chrome profile's extension storage and are never sent to the server. Check IP requests access to `https://ipinfo.io` and `https://api.ipify.org`; only after that approval may Check IP or `proxy_status` contact those services.
 
 **Data usage:** check "Website content", "Authentication information" (cookies), "Web history" (from 0.9.16 the extension keeps up to ten recently refused host names locally for the Allow button), and "Personal communications" if the user's allowlist includes such sites. Certify: not sold, not used for unrelated purposes, not used for creditworthiness. Browser results go to the local server and then the configured MCP client, including remote clients when the user enables a tunnel. Proxy IP checks contact the services described above.
 

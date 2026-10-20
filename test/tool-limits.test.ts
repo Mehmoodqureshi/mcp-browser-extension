@@ -26,7 +26,7 @@ function textOf(r: CallToolResult): string {
   return block && block.type === 'text' ? block.text : '';
 }
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true, allowDownloads: true };
+const OPEN: Partial<Policy> = { allowDomains: ['example.com'], enableMutations: true, allowEval: true, allowDownloads: true };
 
 test('an over-long selector is a clean isError, not a throw', async () => {
   configure(OPEN, { activeUrl: 'https://example.com' });

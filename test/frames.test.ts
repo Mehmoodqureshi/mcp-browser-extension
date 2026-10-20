@@ -31,7 +31,7 @@ function textOf(r: CallToolResult): string {
   return block && block.type === 'text' ? block.text : '';
 }
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true };
+const OPEN: Partial<Policy> = { allowDomains: ['example.com', 'pay.example.net', 'tracker.example.net'], enableMutations: true, allowEval: true };
 
 // ---------------------------------------------------------------------------
 // The shadow-DOM resolution fix
@@ -223,9 +223,7 @@ test('observer content scripts are registered only for allowlisted sites', () =>
     observerMatches({ ...resolvePolicy({ allowDomains: ['*.example.com'] }), allowObservers: true }),
     ['*://*.example.com/*'],
   );
-  assert.deepEqual(observerMatches({ ...resolvePolicy({ allowDomains: ['*'] }), allowObservers: true }), [
-    '<all_urls>',
-  ]);
+  assert.deepEqual(observerMatches({ ...resolvePolicy({ allowDomains: ['*'] }), allowObservers: true }), []);
   assert.deepEqual(observerMatches(resolvePolicy({})), []);
 });
 

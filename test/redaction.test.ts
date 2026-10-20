@@ -41,7 +41,7 @@ function textOf(r: CallToolResult): string {
   return block && block.type === 'text' ? block.text : '';
 }
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true };
+const OPEN: Partial<Policy> = { allowDomains: ['example.com'], enableMutations: true, allowEval: true };
 
 beforeEach(() => resetSnapshots());
 

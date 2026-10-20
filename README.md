@@ -63,6 +63,12 @@ for one), so the question is what you get on top of the session:
   keys and JWTs out of page reads.
 - **An audit trail**: every call is logged with the URL, the allow/deny
   verdict, duration and bytes returned.
+- **Recent activity in Chrome**: the popup shows the latest five activity rows (a tab's open/close pair shares one row);
+  Settings shows up to 100 with outcome filters. This session history contains
+  website names and app keys, without page text, entered values or full URLs.
+- **Stop access**: disconnect all apps from the popup or Settings. The stop
+  survives restarts; Resume connection requires fresh approval for each app.
+  A command already running may finish, and completed actions cannot be undone.
 - **It stays out of your tab**: the agent opens its own tabs in the background
   and works there, so the page you are on is never navigated, clicked or pulled
   out of focus. `batch` reads many of them at once in one call.
@@ -138,14 +144,15 @@ with `/mcp` inside a session — no restart needed.
 
 By default everything is **deny-all** (no domains, no eval, no mutations). Grant
 exactly what you need with `--allow-domain <glob>` (repeatable), `--enable-mutations`,
-`--enable-downloads`, `--enable-uploads`, `--unsafe-enable-eval`, or `--unsafe-all-domains`.
+`--enable-downloads`, `--enable-uploads`, or `--unsafe-enable-eval`. All-site access
+is not supported; approve named websites in the Chrome extension popup.
 
 Email verification is on by default. For a trusted, local unattended setup, you
 can opt out with `--no-email-verification` (or set
 `MCP_BROWSER_EXTENSION_EMAIL_VERIFICATION=0`). This skips the email prompt and
 the Firebase access service, so no email or device grant is sent there. The
-local MCP client can then use the browser within the configured domain and
-capability policy without an account check. Treat every process that can launch
+local MCP client still needs approval inside Chrome before using the extension,
+and stays within the configured domain and capability policy. Treat every process that can launch
 or reach this local server as trusted. This option is rejected with `--tunnel`
 and does not turn off telemetry or the npm update check.
 
@@ -155,7 +162,7 @@ and does not turn off telemetry or the npm update check.
 > with `--uploads-dir <path>` to restrict uploads to files inside that directory
 > (`..` traversal is blocked) — strongly recommended for unattended use.
 
-**Pair once, never again.** Both examples above include `--persist-token`, which
+**Keep transport pairing across restarts.** Both examples above include `--persist-token`, which
 is what makes the pairing survive a restart — drop it if you'd rather have the
 stricter default described next.
 
@@ -163,7 +170,8 @@ Without `--persist-token` a fresh token is minted every boot (the secure
 default), which means re-pairing the extension on each restart. With it, the
 token is stored 0600 at `~/.mcp-browser-extension/token` and reused; the extension's
 keepalive auto-reconnects with no manual step. `MCP_BROWSER_EXTENSION_TOKEN` pins the token
-explicitly (and is never written to disk).
+explicitly (and is never written to disk). This transport pairing does not grant
+an app access: every new app session has a separate key and needs Chrome approval.
 
 **2. Install the extension** — **required**; the server can drive nothing without it.
 
@@ -202,6 +210,41 @@ token. Chrome lets only this extension talk to that helper. If the server ever
 changes its token, the extension fetches the new one by itself. Nothing to copy
 or paste.
 
+**5. Approve the app connection in Chrome.** Run `chrome_status`, then open
+the extension popup's **App connections** section. Compare the key
+fingerprint with the one in the tool result and click **Approve for 8 hours**.
+App names are supplied by the app; the key identifies this particular session.
+Retry the tool after approving. A question-mark badge and the popup show pending
+requests, even if the client hides its prompts. Approve, deny, revoke and restore
+connections directly in the popup or in Settings.
+
+Each app session has its own signing key, held only in that server session's memory.
+Approval applies to this Chrome profile for eight hours. Restarting the app's MCP
+connection creates a new key and needs a new approval. **Remove access** blocks further
+commands from that key; an action already running may finish. YOLO, bypass-permission
+mode and `--no-email-verification` cannot skip this extension check.
+
+**6. Allow the websites you need.** The popup shows a Website access request.
+Click **Allow**, then accept Chrome's website permission prompt if shown. This
+single flow grants that named website in both Chrome and the server's allowlist.
+Allowing a website lets approved apps read and take actions there, including
+sending messages, deleting information and making purchases, subject to the
+configured tool permissions. There is no separate extension approval for each
+action. Website access is remembered until removed and shared by approved app
+sessions; each app still needs its own unexpired connection approval.
+Removing the website also removes its Chrome permission. Existing server flags
+do not grant Chrome access, and an upgrade may ask you to approve websites again.
+
+Cookies and downloads ask separately under **Extra permissions** when needed.
+They start off, and their buttons also let you remove permission. Proxy
+authentication and IP lookups request permission from Settings. Chrome does not
+support making `debugger` or `proxy` optional; those remain required, and debugger
+commands still check website permission before they run.
+
+Update both the extension and server before using client approval. An older
+extension cannot enforce it, and the updated server refuses browser commands
+until the extension is updated. See [client approval details](docs/CLIENT-APPROVAL.md).
+
 <details>
 <summary>Developers: load it unpacked instead</summary>
 
@@ -232,7 +275,8 @@ stays in the toolbar. Hover it for the status in words.
 
 | Badge | Meaning |
 |---|---|
-| green dot | paired and connected |
+| green dot | transport paired and connected |
+| question mark | a connection or site needs your review |
 | yellow dots | connecting |
 | grey circle | not paired yet (no server has run, or no pairing file) |
 | red exclamation mark | token rejected; the server rotated it, re-pairs by itself in a moment |
@@ -291,8 +335,9 @@ and the rest join the new hub. A call that was in flight at that moment fails
 once with `EXTENSION_DISCONNECTED` and is retried automatically when it is safe
 to repeat.
 
-Peers authenticate with the pairing token from the 0600 handshake file, so only
-your own OS user can join. A server too old to share the port is replaced as
+Peers authenticate to the local transport with the pairing token from the 0600
+handshake file. That token alone cannot authorize browser commands: each session
+must sign its own commands with a key approved inside Chrome. A server too old to share the port is replaced as
 before: it is verified to be an MCP Browser Extension server, then stopped. Anything that isn't a
 verified MCP Browser Extension server is never touched — a port held by some other program is
 reported, never killed.
@@ -665,7 +710,6 @@ status badge, and a stable pairing token (`--persist-token`).
 ```
 mcp-browser-extension --allow-domain example.com --enable-mutations
 mcp-browser-extension --policy ./policy.json          # see policy.example.json
-mcp-browser-extension --unsafe-all-domains            # loud footgun
 mcp-browser-extension --enable-observers              # console/network/dialog capture (patches page globals)
 mcp-browser-extension --redact                        # scrub secret-shaped strings out of page reads
 ```
@@ -677,7 +721,8 @@ is allowed (with its own Allow), and lists the allowed sites. The Options page
 (Settings in the popup) also has a box to allow any other site. An allowed site applies at once to every session sharing that Chrome, and
 is saved to `~/.mcp-browser-extension/allowed-sites.json` so it survives restarts. Sites
 allowed there can be removed there; sites from `--allow-domain` stay until the
-flags change. The catch-all `*` can only come from `--unsafe-all-domains`. The
+flags change. Catch-all patterns do not grant access. Remove the retired
+`--unsafe-all-domains` option from older configurations before starting. The
 agent cannot approve a site itself: MCP Browser Extension never reads or drives the
 extension's own pages. Run with `--no-site-grants` to keep the allowlist exactly
 what the flags say.

@@ -107,27 +107,26 @@ function isAboutBlank(url: string): boolean {
  * a full URL ("https://example.com/app") or a "host:port/path" instead of a bare
  * host; those forms would never equal a hostname and so silently match nothing.
  * We strip the scheme, userinfo, port, and path/query/fragment, preserving a
- * leading "*." wildcard and the two catch-all forms. Returns '' for a pattern
- * that carries no host (which then matches nothing).
+ * leading "*." for a named site's subdomains. Catch-all patterns and patterns
+ * without a host return '' and never grant access.
  */
 export function normalizeDomainPattern(pattern: string): string {
   let p = pattern.trim().toLowerCase();
-  if (p === '*' || p === '*://*/*') return '*';
+  if (p === '*' || p === '*://*/*' || p === '<all_urls>') return '';
   // Strip a leading scheme ("https://", "http://", any "scheme://").
   p = p.replace(/^[a-z][a-z0-9+.-]*:\/\//, '');
   // Drop everything from the first path/query/fragment separator onward.
   p = p.replace(/[/?#].*$/, '');
   // Strip userinfo ("user:pass@") then a trailing port (":8080").
   p = p.replace(/^[^@]*@/, '').replace(/:\d+$/, '');
-  return p;
+  return p === '*' || p === '*.' ? '' : p;
 }
 
-/** Convert a single domain glob to a predicate. '*' matches everything;
+/** Convert a named domain pattern to a predicate.
  *  '*.example.com' matches example.com and any subdomain; otherwise exact host.
  *  URL/port/path forms are normalized to their bare host first. */
 function globMatches(host: string, pattern: string): boolean {
   const p = normalizeDomainPattern(pattern);
-  if (p === '*') return true;
   if (p.startsWith('*.')) {
     const base = p.slice(2);
     return host === base || host.endsWith('.' + base);
@@ -192,32 +191,17 @@ export function evaluatePolicy(url: string, method: WireMethod, policy: WirePoli
 
   if (!isDomainAllowed(url, policy)) {
     const host = hostOf(url) || url;
-    return { ok: false, reason: blockedDomainMessage(method, host, policy) };
+    return { ok: false, reason: blockedDomainMessage(host) };
   }
   return { ok: true };
 }
 
 /**
- * A plain-English, actionable message for a blocked domain. Tells the user what
- * happened, why it's blocked (safety, not a bug), which sites ARE allowed, and
- * the exact one-line change to permit this one — so a non-technical user is never
- * left at a dead end. Never includes the token or any other secret.
+ * One friendly line with the person's next step. The agent must relay it and
+ * wait; only the person can approve the site in Chrome.
  */
-export function blockedDomainMessage(method: string, host: string, policy: WirePolicy): string {
-  const allowed = policy.allowDomains.filter((d) => d !== '*');
-  const allowedLine = allowed.length
-    ? `Currently allowed: ${allowed.join(', ')}.`
-    : `Right now no sites are allowed.`;
-  return (
-    `Blocked: "${method}" can't run on ${host} because it isn't on this browser tool's allowed-sites list. ` +
-    `This is a safety limit (the tool drives your real, logged-in browser, so it only touches sites you've approved) — not an error. ` +
-    `${allowedLine} ` +
-    `To allow ${host} right now, ask the user to click the MCP Browser Extension's toolbar icon in Chrome ` +
-    `and click Allow next to ${host}: it applies at once, no restart. ` +
-    `You cannot approve a site yourself. ` +
-    `Or add --allow-domain "${host}" (or "*.${host}" to include subdomains) to the MCP Browser Extension server settings (its entry in your MCP config) and restart. ` +
-    `To allow every site (less safe), use --unsafe-all-domains.`
-  );
+export function blockedDomainMessage(host: string): string {
+  return `Please allow access to ${host}: Chrome → MCP Browser Extension icon → Allow next to ${host}, then try again.`;
 }
 
 /** A wire policy that allows nothing — the safe default when none was delivered. */

@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <title>MCP Browser Extension — Settings</title>
+    <link rel="stylesheet" href="activity-dashboard.css" />
     <style>
       :root {
         --site-primary: oklch(0.58 0.19 255);
@@ -39,6 +40,19 @@
       .quick .hint.error { color: #b45309; }
       select { width: 100%; padding: 0.5rem; font: inherit; }
       .grid { display: grid; grid-template-columns: 1fr 7rem; gap: 0 0.5rem; }
+      #client-connections li { align-items: start; flex-wrap: wrap; gap: 0.75rem; }
+      #client-connections code { font-size: 0.8rem; }
+      #client-connections button { margin: 0.25rem 0.25rem 0 0; }
+      .client-info { flex: 1; min-width: 0; display: grid; justify-items: start; gap: 4px; overflow-wrap: anywhere; }
+      .client-status { font-size: 0.9rem; }
+      .client-details { flex-basis: 100%; min-width: 0; color: #555; font-size: 0.85rem; overflow-wrap: anywhere; }
+      .client-details summary { width: fit-content; padding: 2px 0; cursor: pointer; }
+      .client-details summary:focus-visible { outline: 2px solid var(--site-ring); outline-offset: 3px; border-radius: 2px; }
+      .client-details p { margin: 4px 0; }
+      .client-details code { display: inline-block; margin-top: 4px; }
+      #extra-permissions-list li { display: block; padding: 0.75rem 0; }
+      #extra-permissions-list p { margin: 0.35rem 0; }
+      #extra-permissions-list button { margin-top: 0.25rem; }
       .proxy-on { background: #ecfdf5; }
       .proxy-err { background: #fff7ed; }
     </style>
@@ -49,7 +63,44 @@
     <div class="quick" id="quick">
       <button id="connect" class="primary">Connect</button>
       <p class="hint" id="connect-msg">One click fetches the port and token from the server. Chrome asks once for permission.</p>
+      <div class="access-controls">
+        <button id="access-stop">Stop access</button>
+        <button id="access-resume" hidden>Resume connection</button>
+      </div>
+      <p class="hint" id="access-note" role="status"></p>
     </div>
+    <section id="clients-section">
+      <h2>App connections</h2>
+      <p class="hint">Only approve a connection you just started. App names are supplied by the app:
+        compare the key below with the key shown in your app's tool result.</p>
+      <p class="hint">Each entry is a separate connection. Approval lasts eight hours in this Chrome profile. A new app session needs a new approval.
+        Revoking access blocks further commands; an action already running may finish.</p>
+      <ul class="sites" id="client-connections"></ul>
+      <p class="hint" id="client-note" role="status" aria-live="polite"></p>
+    </section>
+
+    <section id="activity-section">
+      <h2>Recent activity</h2>
+      <label for="activity-filter">Show requests</label>
+      <select id="activity-filter">
+        <option value="all">All results</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="blocked">Blocked</option>
+        <option value="failed">Failed</option>
+        <option value="interrupted">Interrupted</option>
+      </select>
+      <ul id="activity-list" class="activity-list" aria-label="Recent activity"></ul>
+      <p class="hint" id="activity-note" role="status"></p>
+      <div class="activity-actions"><button id="activity-clear">Clear history</button></div>
+      <details class="activity-help">
+        <summary>About this history</summary>
+          <p>MCP activity appears automatically. Opening and closing the same tab with the same app share one row. Select a row for the app, key and times.</p>
+        <p>Last 100 requests received by this extension, kept only for this Chrome session. Website names, app keys and results only; no page text or entered values. App names are supplied by the apps.</p>
+        <p>Requests refused by the server may not appear. Interrupted means the result was withheld or unavailable; an action may still have finished. This is a convenience history, not a complete audit record.</p>
+      </details>
+    </section>
+
     <p class="hint" id="manual-intro">Or pair by hand:</p>
     <p class="hint" id="source">Checking pairing source…</p>
     <p class="hint">
@@ -82,8 +133,10 @@
       <h2>Allowed sites</h2>
       <p class="hint">
         MCP Browser Extension only reads or acts on sites you allow. Allowing one here applies at once to every
-        AI session, with no restart, and is remembered.
+        approved app session, with no restart, and is remembered. Click Allow, then accept Chrome’s
+        website permission request if shown. Remove also removes Chrome’s website permission.
       </p>
+      <p class="hint">Allowing a site lets approved apps read and take actions there, including sending, deleting and buying, without a separate approval for each action. Remove access whenever you want to stop new actions.</p>
       <div id="blocked-wrap" hidden>
         <p><strong>Recently blocked</strong></p>
         <ul class="sites blocked" id="blocked"></ul>
@@ -95,6 +148,11 @@
         <input id="new-site" type="text" placeholder="example.com or *.example.com" />
         <button id="add-site">Allow</button>
       </div>
+    </section>
+    <section id="extra-permissions" hidden>
+      <h2>Extra permissions</h2>
+      <ul class="sites" id="extra-permissions-list"></ul>
+      <p class="hint" id="extra-permissions-note" role="status" aria-live="polite"></p>
     </section>
     <section id="proxy-section">
       <h2>Proxy</h2>

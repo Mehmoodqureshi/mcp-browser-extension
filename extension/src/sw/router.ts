@@ -1,3 +1,5 @@
+import { isHealthProbe } from '../../../shared/client-auth';
+import { activityHost, type ActivityEntry } from '../../../shared/activity';
 /**
  * extension/src/sw/router.ts — the never-throw command firewall (the extension
  * mirror of the server's dispatchToolCall). Exactly one result/error frame per
@@ -14,14 +16,19 @@ import {
   type ResultFrame,
   type WirePolicy,
 } from '../../../shared/protocol';
-import { evaluatePolicy, isUrlGated } from '../../../shared/policy';
+import { evaluatePolicy, isUrlGated, isDomainAllowed, hostOf } from '../../../shared/policy';
 import { ChromeExecutor, CmdError, HANDLED, observedTabUrl, resolveTab, urlForCommand } from './executor';
+import { requireSitePermission } from './browser-permissions';
 
 export interface RouterDeps {
   exec: ChromeExecutor;
+  authorize?: (cmd: CommandFrame, verified?: (id: string, name: string) => void) => Promise<() => void>;
+  access?: () => () => void;
+  activity?: () => (entry: ActivityEntry) => void;
   send: (frame: ResultFrame | ErrorFrame) => void;
   /** The policy delivered in `welcome`, or null before one arrives. */
   getPolicy: () => WirePolicy | null;
+  onBlocked?: (host: string, method: string) => void;
   log: (message: string) => void;
   /** The "mcp-browser-extension is working here" tab border; optional so tests can omit it. */
   border?: {
@@ -50,8 +57,20 @@ export class CommandRouter {
     }
   }
 
-  async dispatch(cmd: CommandFrame): Promise<void> {
+  async dispatch(cmd: CommandFrame, send = this.deps.send): Promise<void> {
+    const record = this.deps.activity?.();
+    // Health and approval probes carry no browser action and would swamp history.
+    const entry: ActivityEntry | null = cmd.method === 'ping_probe' ? null : {
+      id: crypto.randomUUID(), at: Date.now(), method: cmd.method, host: '', app: '', key: '', outcome: 'running',
+    };
+    let ran = false;
+    let checkStopped: (() => void) | undefined;
     try {
+      checkStopped = this.deps.access?.();
+      if (isHealthProbe(cmd)) {
+        send({ type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: { ok: true } });
+        return;
+      }
       // THE authoritative policy gate. It runs the SAME shared `evaluatePolicy`
       // the server runs, but here it is decisive rather than defence-in-depth:
       // only this side can resolve the EXACT target tab (an explicit `tabId`, not
@@ -71,10 +90,44 @@ export class CommandRouter {
           'no policy has arrived from the MCP Browser Extension server yet, so this extension is refusing every command',
         );
       }
+      if (!this.deps.authorize) throw new CmdError('POLICY_DENIED', 'Client approval enforcement is unavailable.');
+      const checkApproval = await this.deps.authorize(cmd, (id, name) => {
+        if (entry) { entry.key = id; entry.app = name; }
+      });
+      const checkAccess = (): void => { checkStopped?.(); checkApproval(); };
+      if (cmd.method === 'ping_probe') {
+        checkAccess();
+        send({ type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: {} });
+        return;
+      }
       // One tab lookup serves the gate, the executor and the result frame.
       const tab = await resolveTab(cmd);
+      if (entry && tab !== null) entry.tabId = tab;
+      if (entry && cmd.method === 'tab_new') entry.host = activityHost(
+        typeof cmd.params.url === 'string' ? cmd.params.url : 'chrome://newtab',
+      );
+      // Tab creation loads a page too; check its destination before running it.
+      if (cmd.method === 'tab_new' && typeof cmd.params.url === 'string' && cmd.params.url !== 'about:blank') {
+        const url = cmd.params.url;
+        if (entry) entry.host = activityHost(url);
+        if (isOwnExtensionPage(url)) throw new CmdError('POLICY_DENIED', 'MCP Browser Extension never acts on its own pages');
+        const verdict = evaluatePolicy(url, 'navigate', policy!);
+        if (!verdict.ok) {
+          this.deps.onBlocked?.(hostOf(url), cmd.method);
+          throw new CmdError('POLICY_DENIED', verdict.reason);
+        }
+        try { await requireSitePermission(url); }
+        catch (err) { this.deps.onBlocked?.(hostOf(url), cmd.method); throw err; }
+      }
+      const targetUrl = tab !== null ? await observedTabUrl(cmd, tab) : '';
+      if (tab !== null && isOwnExtensionPage(targetUrl)) {
+        throw new CmdError('POLICY_DENIED', 'MCP Browser Extension never acts on its own pages');
+      }
+      // Capture the resolved target before actions such as closing a tab remove it.
+      if (entry && tab !== null && !isUrlGated(cmd.method)) entry.host = activityHost(targetUrl);
       if (policy) {
         const url = isUrlGated(cmd.method) ? await urlForCommand(cmd, tab) : '';
+        if (entry && url) entry.host = activityHost(url);
         // This extension's own pages are where a person allows sites. The agent
         // must never read or drive them, whatever the allowlist says, or it
         // could approve a site for itself.
@@ -82,23 +135,58 @@ export class CommandRouter {
           throw new CmdError('POLICY_DENIED', "MCP Browser Extension never acts on its own pages");
         }
         const verdict = evaluatePolicy(url, cmd.method, policy);
-        if (!verdict.ok) throw new CmdError('POLICY_DENIED', verdict.reason);
+        if (!verdict.ok) {
+          const host = hostOf(url);
+          if (host && isUrlGated(cmd.method) && !isDomainAllowed(url, policy)) this.deps.onBlocked?.(host, cmd.method);
+          throw new CmdError('POLICY_DENIED', verdict.reason);
+        }
+        if (isUrlGated(cmd.method) && url !== 'about:blank') {
+          try { await requireSitePermission(url); }
+          catch (err) {
+            const host = hostOf(url);
+            if (host) this.deps.onBlocked?.(host, cmd.method);
+            throw err;
+          }
+        }
       }
+      checkAccess();
+      const run = (): Promise<unknown> => {
+        checkAccess();
+        ran = true;
+        if (entry) record?.({ ...entry });
+        return this.deps.exec.run(cmd, tab);
+      };
       const border = this.deps.border;
       const data =
         border && CAPTURES.has(cmd.method)
-          ? await border.aroundCapture(tab, () => this.deps.exec.run(cmd, tab))
-          : await this.deps.exec.run(cmd, tab);
+          ? await border.aroundCapture(tab, run)
+          : await run();
+      checkAccess();
+      if (entry && cmd.method === 'tab_new') {
+        const opened = data as { tabId?: string; url?: string } | null;
+        const id = Number(opened?.tabId?.split(':')[2]);
+        if (Number.isSafeInteger(id) && id >= 0) entry.tabId = id;
+        if (opened?.url) entry.host = activityHost(opened.url) || entry.host;
+      }
       if (border) void this.markBorder(border, cmd, tab, data);
       const frame: ResultFrame = { type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data };
       // Ride the tab's landing URL home so the server's next gate needs no
       // round-trip. Best-effort: a closed/unreadable tab just omits it.
       const tabUrl = await observedTabUrl(cmd, tab);
+      checkAccess();
       if (tabUrl) frame.tabUrl = tabUrl;
-      this.deps.send(frame);
+      if (entry) {
+        // Tabless requests must not inherit the unrelated active tab's website.
+        if (!entry.host && tab !== null && tabUrl) entry.host = activityHost(tabUrl);
+        const result = data as { ok?: boolean; error?: unknown } | null;
+        entry.outcome = (cmd.method === 'fill_form' && result?.error) ||
+          (cmd.method === 'eval' && result?.ok === false) ? 'failed' : 'done';
+      }
+      send(frame);
     } catch (err) {
       const code: ExecutorErrorCode = err instanceof CmdError ? err.code : 'CDP_ERROR';
       const message = err instanceof Error ? err.message : String(err);
+      if (entry) entry.outcome = ran && code === 'POLICY_DENIED' ? 'interrupted' : code === 'POLICY_DENIED' ? 'blocked' : 'failed';
       this.deps.log(`command "${cmd.method}" failed: ${message}`);
       const frame: ErrorFrame = {
         type: 'error',
@@ -107,7 +195,9 @@ export class CommandRouter {
         ok: false,
         error: { code, message },
       };
-      this.deps.send(frame);
+      send(frame);
+    } finally {
+      if (entry) record?.(entry);
     }
   }
 

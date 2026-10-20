@@ -24,6 +24,7 @@ before(async () => {
   h = await startHarness();
   peer = new BridgeServer({ token: 'e2e-token', serverVersion: 'e2e-peer', port: h.port, heartbeatMs: 0, policy: toWirePolicy(h.policy), siteGrants: false });
   await peer.start();
+  await h.approveClient(peer);
   // Route every tool call through the peer instead of the hub.
   resetManagerForTesting();
   configureManager({ policy: h.policy, makeExecutor: () => new ExtensionExecutor(peer) });

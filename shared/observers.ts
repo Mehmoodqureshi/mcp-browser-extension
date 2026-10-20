@@ -187,7 +187,7 @@ export function readObservers(
  * Translate the domain allowlist into Chrome match patterns for registering the
  * hook as a content script. A bare host becomes `*://host/*`; `*.host` becomes
  * `*://*.host/*` (which Chrome reads as the host AND its subdomains, matching
- * how the allowlist itself behaves); `*` becomes `<all_urls>`. Entries carrying
+ * how the allowlist itself behaves). Catch-all entries and entries carrying
  * no host are dropped rather than widened — the page the tool may not read is
  * also the page it must not instrument.
  */
@@ -197,7 +197,6 @@ export function observerMatches(policy: WirePolicy): string[] {
   for (const raw of policy.allowDomains ?? []) {
     const p = normalizeDomainPattern(raw);
     if (!p) continue;
-    if (p === '*') return ['<all_urls>'];
     out.add(`*://${p}/*`);
   }
   return [...out];

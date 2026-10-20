@@ -1,3 +1,5 @@
+import type { ClientProof } from './client-auth';
+
 /**
  * shared/protocol.ts — THE SINGLE SOURCE OF TRUTH for the wire contract.
  *
@@ -241,6 +243,8 @@ export interface BaseFrame {
 // ---- handshake ----
 
 export interface HelloFrame extends BaseFrame {
+  /** Random challenge chosen by the extension for this WebSocket, never by the hub. */
+  approvalChallenge?: string;
   type: 'hello';
   token: string;
   ext: { id: string; version: string; chrome: string };
@@ -311,6 +315,7 @@ export interface UnauthFrame extends BaseFrame {
 // ---- command / result ----
 
 export interface CommandFrame extends BaseFrame {
+  authorization?: ClientProof;
   type: 'command';
   id: string;
   method: WireMethod;

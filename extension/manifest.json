@@ -17,18 +17,15 @@
   "permissions": [
     "tabs",
     "scripting",
-    "downloads",
     "storage",
     "alarms",
-    "cookies",
     "debugger",
     "webNavigation",
-    "proxy",
-    "webRequest",
-    "webRequestAuthProvider"
+    "proxy"
   ],
-  "host_permissions": [
-    "<all_urls>"
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "options_page": "options.html",
   "action": {
@@ -43,6 +40,10 @@
   },
   "optional_permissions": [
     "nativeMessaging",
-    "privacy"
+    "privacy",
+    "cookies",
+    "downloads",
+    "webRequest",
+    "webRequestAuthProvider"
   ]
 }

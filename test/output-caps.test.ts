@@ -29,7 +29,7 @@ import {
 } from '../src/mcp/limits';
 import { getLogLevel, logDebug, logErr, setLogLevel } from '../src/mcp/log';
 
-const OPEN: Partial<Policy> = { allowDomains: ['*'], enableMutations: true, allowEval: true, allowDownloads: true };
+const OPEN: Partial<Policy> = { allowDomains: ['example.com'], enableMutations: true, allowEval: true, allowDownloads: true };
 const TAB = 'extension:stub:1';
 
 function configure(stub: StubOptions = {}): StubExecutor {

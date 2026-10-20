@@ -1,9 +1,11 @@
+import { CLIENT_APPROVAL_CAP, isHealthProbe, type ClientProof } from '../../shared/client-auth';
+import { createClientIdentity, currentClientIdentity } from './client-identity';
 /**
  * src/bridge/server.ts — the localhost WebSocket bridge.
  *
  * The server is the WS SERVER; the extension dials in as the single privileged
- * CLIENT. The token is the ONLY trust boundary (the loopback bind is merely
- * defense-in-depth; Origin is NOT a gate). Flow:
+ * CLIENT. The token authenticates this transport; the extension separately
+ * verifies each command against its approved client keys. Flow:
  *   1. Accept any loopback upgrade.
  *   2. Require a valid `hello` (matching version + token) within HELLO_TIMEOUT;
  *      otherwise send `unauthorized` and close 4401.
@@ -34,7 +36,7 @@ import {
 } from '../../shared/protocol';
 import { DENY_ALL_WIRE_POLICY } from '../../shared/policy';
 import { ExecutorError } from '../executor/types';
-import { ExtensionConnection } from './connection';
+import { ExtensionConnection, defaultTimeoutFor } from './connection';
 import { readHandshake, tokensMatch } from './auth';
 import { evictPortOwner } from './evict';
 import { sanitizeName } from '../config';
@@ -64,6 +66,8 @@ export type ProfileNaming = 'options' | 'auto' | 'legacy';
 
 /** One paired browser, as reported by chrome_status. */
 export interface PairedProfile {
+  /** Public, extension-generated replay scope; not a credential. */
+  approvalChallenge?: string;
   name: string;
   /** options = typed in the extension's Options; auto = assigned by the server
    *  (renamable with profile_rename); legacy = an older extension, "default". */
@@ -175,6 +179,7 @@ export interface BridgeOptions {
 export type BridgeRole = 'hub' | 'peer';
 
 export class BridgeServer {
+  private readonly clientIdentity = createClientIdentity(() => 'Local browser client');
   private wss: WebSocketServer | null = null;
   /** Profile routing key → its live connection. Multiple browsers stay paired at
    *  once; a command is routed to the connection for its target profile. A new
@@ -453,11 +458,33 @@ export class BridgeServer {
     params: Record<string, unknown>,
     opts?: { tabId?: string; timeoutMs?: number; profile?: string },
   ): Promise<unknown> {
-    if (this.hub) return this.hub.relay(method, params, opts);
+    const profile = routeKey(opts?.profile);
+    const timeoutMs = opts?.timeoutMs ?? defaultTimeoutFor(method);
+    const intent = { v: PROTOCOL_VERSION, method, params, tabId: opts?.tabId, timeoutMs };
+    const challenge = this.hub
+      ? this.hub.profiles.find((p) => p.name === profile)?.approvalChallenge
+      : this.conns.get(profile)?.approvalChallenge;
+    let authorization: ClientProof | undefined;
+    if (!isHealthProbe(intent)) {
+      if (!this.hasConnection(profile)) throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
+      if (!challenge) throw new ExecutorError('POLICY_DENIED', 'Update the extension and MCP server together: this browser cannot enforce client approval yet.');
+      authorization = (currentClientIdentity() ?? this.clientIdentity).sign(intent, challenge);
+    }
+    const options = { ...opts, timeoutMs, authorization };
+    if (this.hub) return this.hub.relay(method, params, options);
+    return this.forwardCommand(method, params, options);
+  }
+
+  /** Never sign a peer's request using the hub's identity. Chrome verifies its original proof. */
+  private async forwardCommand(
+    method: WireMethod, params: Record<string, unknown>,
+    opts?: { tabId?: string; timeoutMs?: number; profile?: string; authorization?: ClientProof },
+  ): Promise<unknown> {
     const profile = routeKey(opts?.profile);
     const conn = this.conns.get(profile);
-    if (!conn || !conn.isOpen()) {
-      throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
+    if (!conn?.isOpen()) throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
+    if (!isHealthProbe({ method, params }) && (!conn.hasCap(CLIENT_APPROVAL_CAP) || !opts?.authorization)) {
+      throw new ExecutorError('POLICY_DENIED', 'Signed client authorization and an updated extension are required.');
     }
     return conn.sendCommand(method, params, opts);
   }
@@ -568,17 +595,16 @@ export class BridgeServer {
   }
 
   /** Every paired browser with how it was named — for chrome_status. */
-  pairedProfiles(): PairedProfile[] {
-    if (this.hub) return [...this.hub.profiles];
+  pairedProfiles(includeChallenge = false): PairedProfile[] {
+    if (this.hub) return this.hub.profiles.map(({ approvalChallenge, ...p }) => includeChallenge ? { ...p, approvalChallenge } : p);
     const out: PairedProfile[] = [];
     for (const [name, conn] of this.conns) {
       if (!conn.isOpen()) continue;
-      const activeUrl = conn.lastActiveUrl(Number.POSITIVE_INFINITY) ?? undefined;
       const o = this.origins.get(name);
       out.push({
         name,
         naming: o?.naming ?? 'legacy',
-        ...(activeUrl ? { activeUrl } : {}),
+        ...(includeChallenge && conn.approvalChallenge ? { approvalChallenge: conn.approvalChallenge } : {}),
         ...(o?.extVersion ? { extVersion: o.extVersion } : {}),
         ...(o?.extId || o?.install ? { extSource: extensionSource(o) } : {}),
       });
@@ -592,7 +618,18 @@ export class BridgeServer {
    * in place, so it keeps working without re-pairing.
    */
   async renameProfile(from: string, to: string): Promise<string> {
-    if (this.hub) return String(await this.hub.rename(from, to));
+    if (this.hub) {
+      const challenge = this.hub.profiles.find((p) => p.name === routeKey(from))?.approvalChallenge;
+      if (!challenge) throw new ExecutorError('POLICY_DENIED', 'Connect an updated browser before renaming it.');
+      const intent = { v: PROTOCOL_VERSION, method: 'ping_probe' as const, params: { requireClientApproval: true, renameProfile: { from, to } }, timeoutMs: defaultTimeoutFor('ping_probe') };
+      const authorization = (currentClientIdentity() ?? this.clientIdentity).sign(intent, challenge);
+      return String(await this.hub.rename(from, to, authorization));
+    }
+    await this.sendCommand('ping_probe', { requireClientApproval: true, renameProfile: { from, to } }, { profile: from });
+    return this.renameApprovedProfile(from, to);
+  }
+
+  private async renameApprovedProfile(from: string, to: string): Promise<string> {
     const src = routeKey(from);
     const live = this.conns.get(src);
     if (live?.isOpen() && this.origins.get(src)?.naming === 'options') {
@@ -692,6 +729,7 @@ export class BridgeServer {
         {
           naming,
           installId,
+          approvalChallenge: typeof frame.approvalChallenge === 'string' && /^[a-f0-9-]{36}$/.test(frame.approvalChallenge) ? frame.approvalChallenge : undefined,
           ...(typeof frame.ext?.version === 'string' ? { extVersion: frame.ext.version.slice(0, 32) } : {}),
           ...(typeof frame.ext?.id === 'string' ? { extId: frame.ext.id.slice(0, 64) } : {}),
           ...(typeof frame.install === 'string' ? { install: frame.install.slice(0, 32) } : {}),
@@ -728,7 +766,7 @@ export class BridgeServer {
     this.peers.add(ws);
     this.log(`mcp-browser-extension pid ${pid ?? '?'} joined as a peer (${this.peers.size} sharing these browsers)`);
     this.sendPeer(ws, { type: 'peer_welcome', hubPid: process.pid });
-    this.sendPeer(ws, { type: 'peer_state', profiles: this.pairedProfiles() });
+    this.sendPeer(ws, { type: 'peer_state', profiles: this.pairedProfiles(true) });
     ws.on('message', (raw) => this.handlePeerFrame(ws, raw.toString()));
     ws.on('close', () => this.peers.delete(ws));
     ws.on('error', () => {
@@ -749,15 +787,18 @@ export class BridgeServer {
         (err) => this.sendPeer(ws, relayError(id, err)),
       );
     };
-    if (frame.type === 'relay') answer(frame.id, this.sendCommand(frame.method, frame.params ?? {}, frame.opts));
-    else if (frame.type === 'peer_rename') answer(frame.id, this.renameProfile(frame.from, frame.to));
+    if (frame.type === 'relay') answer(frame.id, this.forwardCommand(frame.method, frame.params ?? {}, frame.opts));
+    else if (frame.type === 'peer_rename') answer(frame.id, this.forwardCommand(
+      'ping_probe', { requireClientApproval: true, renameProfile: { from: frame.from, to: frame.to } },
+      { profile: frame.from, timeoutMs: defaultTimeoutFor('ping_probe'), authorization: frame.authorization },
+    ).then(() => this.renameApprovedProfile(frame.from, frame.to)));
     else if (frame.type === 'peer_blocked' && typeof frame.host === 'string') this.noteBlocked(frame.host, String(frame.method ?? ''));
   }
 
   /** Tell every peer which browsers are paired — on each pair, unpair and rename. */
   private broadcastState(): void {
     if (this.peers.size === 0) return;
-    const state: HubToPeerFrame = { type: 'peer_state', profiles: this.pairedProfiles() };
+    const state: HubToPeerFrame = { type: 'peer_state', profiles: this.pairedProfiles(true) };
     for (const peer of this.peers) this.sendPeer(peer, state);
   }
 
@@ -784,7 +825,7 @@ export class BridgeServer {
     ext: HelloFrame['ext'],
     profile: string,
     caps: string[] | undefined,
-    origin: { naming: ProfileNaming; installId?: string; extVersion?: string; extId?: string; install?: string },
+    origin: { approvalChallenge?: string; naming: ProfileNaming; installId?: string; extVersion?: string; extId?: string; install?: string },
   ): void {
     const sessionId = randomUUID();
 
@@ -812,6 +853,7 @@ export class BridgeServer {
       sessionId,
       heartbeatMs: this.heartbeatMs,
       caps,
+      approvalChallenge: origin.approvalChallenge,
       onEvent: this.opts.onEvent,
       onSiteGrant: (host, allow) => this.applySiteGrant(host, allow),
       onLog: (m) => this.log(m),

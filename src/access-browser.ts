@@ -1,5 +1,5 @@
 /** A temporary loopback email form for clients that cannot display elicitation. */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 
@@ -27,27 +27,71 @@ export function openBrowserEmailPrompt(url: string): void {
 const escapeHtml = (s: string): string =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 
+// Native form submission still works without JavaScript. This only provides
+// immediate feedback; the server also deduplicates concurrent submissions.
+const FORM_SCRIPT = `
+const form = document.querySelector('form');
+if (form) {
+  const button = form.querySelector('button');
+  const email = form.querySelector('[name="email"]');
+  const status = document.getElementById('verification-status');
+  const originalStatus = status.textContent;
+  let sending = false;
+  form.addEventListener('submit', (event) => {
+    if (sending) { event.preventDefault(); return; }
+    sending = true;
+    button.disabled = true;
+    button.textContent = 'Sending…';
+    email.readOnly = true;
+    form.setAttribute('aria-busy', 'true');
+    status.textContent = 'Sending your sign-in link…';
+  });
+  window.addEventListener('pageshow', () => {
+    sending = false;
+    button.disabled = false;
+    button.textContent = 'Send verification link';
+    email.readOnly = false;
+    form.removeAttribute('aria-busy');
+    status.textContent = originalStatus;
+  });
+}
+`;
+const FORM_SCRIPT_HASH = createHash('sha256').update(FORM_SCRIPT).digest('base64');
+
 function page(path: string, csrf: string, message: string, sent: boolean): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Verify your email | MCP Browser Extension</title>
 <style>
-  :root{color-scheme:light dark;font-family:system-ui,sans-serif}
-  body{max-width:440px;margin:12vh auto;padding:24px;line-height:1.5}
-  h1{font-size:28px;line-height:1.2} label{display:block;font-weight:600}
-  input,button{box-sizing:border-box;width:100%;font:inherit;padding:12px;margin-top:8px;border:1px solid #888;border-radius:6px}
-  button{margin-top:18px;background:#175cd3;color:white;border-color:#175cd3;cursor:pointer}
-  p{margin:20px 0} .brand{font-size:14px} small{display:block;margin-top:18px}
+  /* Match the extension popup's existing light/dark theme. */
+  :root{color-scheme:light dark;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+    --bg:#ffffff;--panel:#f6f7f9;--fg:#0f172a;--muted:#64748b;--line:#e6e8ec;
+    --accent:oklch(0.58 0.19 255);--accent-foreground:oklch(0.99 0 0);--ring:oklch(0.58 0.19 255 / 35%)}
+  @media(prefers-color-scheme:dark){:root{--bg:#0b0d12;--panel:#11141b;--fg:#e8ebf2;--muted:#8b93a7;--line:#232836;
+    --accent:oklch(0.7 0.16 255);--accent-foreground:oklch(0.12 0.02 255);--ring:oklch(0.7 0.16 255 / 45%)}}
+  *{box-sizing:border-box}
+  body{max-width:488px;margin:12vh auto;padding:24px;background:var(--bg);color:var(--fg);line-height:1.5;-webkit-font-smoothing:antialiased}
+  h1{font-size:28px;line-height:1.2;font-weight:500;letter-spacing:-0.025em}
+  label{display:block;font-weight:500}
+  input,button{width:100%;font:inherit;padding:12px;margin-top:8px;border:1px solid var(--line);border-radius:9px}
+  input{background:var(--panel);color:var(--fg)}
+  input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;box-shadow:0 0 0 4px var(--ring)}
+  button{margin-top:18px;background:var(--accent);color:var(--accent-foreground);border-color:transparent;font-weight:500;cursor:pointer}
+  button:hover:not(:disabled){background:color-mix(in oklch,var(--accent) 88%,var(--fg))}
+  button:disabled{cursor:wait}
+  p{margin:20px 0;color:var(--muted)} .brand{font-size:14px;color:var(--fg)}
+  small{display:block;margin-top:18px;color:var(--muted)}
 </style>
 <body><p class="brand">MCP Browser Extension</p><h1>${sent ? 'Check your inbox' : 'Verify your email'}</h1>
-<p role="status">${escapeHtml(message)}</p>
+<p id="verification-status" role="status">${escapeHtml(message)}</p>
 ${sent ? '<p>After opening the sign-in link, return to your assistant to continue.</p>' : `
 <form method="post" action="${path}">
   <input type="hidden" name="csrf" value="${csrf}">
   <label for="email">Email address</label>
   <input id="email" name="email" type="email" autocomplete="email" maxlength="254" required autofocus>
   <button type="submit">Send verification link</button>
-</form><small>Your email is sent to mcp-browser-extension.com to verify and manage access.</small>`}
+</form><small>Your email is sent to mcp-browser-extension.com to verify and manage access.</small>
+<script>${FORM_SCRIPT}</script>`}
 </body></html>`;
 }
 
@@ -60,7 +104,7 @@ export async function createBrowserEmailPrompt(
   const csrf = randomBytes(32).toString('hex');
   let origin = '';
   let sent = false;
-  let busy = false;
+  let sending: Promise<EmailSubmission> | undefined;
   let closed = false;
   let expiry: ReturnType<typeof setTimeout> | undefined;
   const sentMessage = 'A sign-in link has been sent. Open it from your email and click Verify this device to finish verification.';
@@ -73,7 +117,7 @@ export async function createBrowserEmailPrompt(
       'referrer-policy': 'same-origin',
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      'content-security-policy': `default-src 'none'; script-src 'sha256-${FORM_SCRIPT_HASH}'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`,
     });
     res.end(page(path, csrf, message, sent));
   };
@@ -86,7 +130,10 @@ export async function createBrowserEmailPrompt(
         return;
       }
       if (req.method === 'GET') {
-        respond(res, 200, sent ? sentMessage : 'Enter your email below. We will send you a one-time sign-in link.');
+        // A reload during delivery must wait for the same result instead of
+        // restoring an email-entry form that is already being submitted.
+        const outcome = sending ? await sending : undefined;
+        respond(res, 200, sent ? sentMessage : outcome?.message ?? 'Enter your email below. We will send you a one-time sign-in link.');
         return;
       }
       if (req.method !== 'POST') { res.writeHead(405, { allow: 'GET, POST' }).end(); return; }
@@ -105,15 +152,16 @@ export async function createBrowserEmailPrompt(
       const fields = new URLSearchParams(body);
       if (fields.get('csrf') !== csrf) { res.writeHead(403).end(); return; }
       if (sent) { respond(res, 200, sentMessage); return; }
-      if (busy) { respond(res, 409, 'Your request is already being sent. Please wait.'); return; }
-      busy = true;
-      try {
-        const outcome = await submit(fields.get('email') ?? '');
-        sent = outcome.ok;
-        respond(res, outcome.ok ? 200 : 400, outcome.ok ? sentMessage : outcome.message);
-      } finally {
-        busy = false;
+      if (!sending) {
+        // A repeated click replaces the browser's pending navigation. Share
+        // its result so the latest page shows the outcome of the one email.
+        sending = Promise.resolve()
+          .then(() => submit(fields.get('email') ?? ''))
+          .then((outcome) => { sent = outcome.ok; return outcome; })
+          .finally(() => { sending = undefined; });
       }
+      const outcome = await sending;
+      respond(res, outcome.ok ? 200 : 400, outcome.ok ? sentMessage : outcome.message);
     })().catch(() => { if (!res.headersSent) respond(res, 503, 'The verification service could not be reached. Please try again.'); });
   });
   server.requestTimeout = 10_000;

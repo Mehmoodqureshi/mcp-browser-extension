@@ -1,3 +1,4 @@
+import { createClientIdentity, withClientIdentity } from '../bridge/client-identity';
 /**
  * src/mcp/tools.ts — the MCP tool surface: the advertised catalog
  * (`TOOL_DEFINITIONS`, each with a zod `inputSchema`), the name→handler dispatch
@@ -390,13 +391,13 @@ const TOOL_GATE: Readonly<Record<string, WireMethod | null>> = {
  *
  * Runs the REAL `evaluatePolicy` — the same function the gate and the extension
  * router run, so this can never disagree with them — but with the domain
- * allowlist widened to `*`. Only the capability gates (eval / downloads /
+ * allowlist set to the single probe host. Only the capability gates (eval / downloads /
  * uploads / observers / mutations) can then reject, which is exactly the
  * question we want: a tool blocked merely because the current tab is off the
  * allowlist stays advertised, since another tab may well be on it.
  */
 function isCapabilityDenied(method: WireMethod, policy: Policy): boolean {
-  return !evaluatePolicy('https://probe.invalid/', method, { ...policy, allowDomains: ['*'] }).ok;
+  return !evaluatePolicy('https://probe.invalid/', method, { ...policy, allowDomains: ['probe.invalid'] }).ok;
 }
 
 /**
@@ -1352,7 +1353,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   },
 
   chrome_status: async (_a, ctx) => {
-    const profiles = profileBridge ? { profiles: profileBridge.pairedProfiles() } : {};
+    const profiles = profileBridge ? { profiles: profileBridge.pairedProfiles().map(({ approvalChallenge: _challenge, activeUrl: _url, ...profile }) => profile) } : {};
     const capabilities = capabilityStatus(ctx.policy);
     // Why nothing is paired, and the steps to fix it, so the agent can relay them
     // on the FIRST call instead of after a run of NO_BACKEND failures.
@@ -1648,6 +1649,10 @@ function modelFromMeta(meta: unknown): string | undefined {
 /** Register the tool surface; returns the names actually advertised. */
 export function registerTools(server: McpServer, policy?: Policy, accessGuard: typeof requireAccess = requireAccess): string[] {
   assertNoDrift();
+  const identity = createClientIdentity(() => {
+    const client = server.server.getClientVersion();
+    return client ? `${client.name} ${client.version}` : 'Unnamed app';
+  });
 
   // Register each tool with its zod `inputSchema`. The SDK advertises it in
   // `tools/list` and validates arguments before invoking the handler, which
@@ -1666,7 +1671,7 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
     server.registerTool(
       d.name,
       { description: d.description, inputSchema: d.inputSchema },
-      async (args, extra) => {
+      async (args, extra) => withClientIdentity(identity, async () => {
         noteMcpModel(modelFromMeta(extra?._meta));
         let verifiedNow = false;
         const accessError = await accessGuard(server.server, resolveDataDir(), {
@@ -1677,10 +1682,17 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
           onVerified: () => { verifiedNow = true; },
         });
         if (accessError) return accessError;
+        if (profileBridge?.hasActiveExtension()) {
+          const active = peekActiveWorkspace()?.profile ?? 'default';
+          const profile = profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name;
+          try {
+            await profileBridge.sendCommand('ping_probe', { requireClientApproval: true }, { profile });
+          } catch (err) { return errorResult(err instanceof Error ? err.message : 'Chrome client approval is required.'); }
+        }
         const result = await dispatchToolCall(d.name, args);
         if (verifiedNow) result.content.unshift({ type: 'text', text: 'Email verified. MCP Browser Extension access is active.' });
         return result;
-      },
+      }),
     );
     registered.push(d.name);
   }

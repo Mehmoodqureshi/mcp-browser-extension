@@ -13,6 +13,7 @@
 
 import type { ProxyWireStatus } from '../../../shared/protocol';
 import { PROXY_STORAGE_KEY, parseProxyConfig } from '../../../shared/proxy';
+import { IP_LOOKUP_ORIGINS } from '../../../shared/browser-permissions';
 
 export { PROXY_STORAGE_KEY };
 
@@ -62,6 +63,7 @@ async function setWebrtcProtection(on: boolean): Promise<void> {
 
 /** Apply the stored config to Chrome: set the proxy when enabled, clear it otherwise. */
 export async function applyProxy(log: (m: string) => void): Promise<void> {
+  if (!await chrome.permissions.contains({ permissions: ['proxy'] })) return;
   const cfg = await loadProxyConfig();
   if (cfg?.enabled) {
     await chrome.proxy.settings.set({
@@ -114,6 +116,9 @@ export function onProxyAuth(
 
 /** Ask an IP-echo service what address sites see. Goes through the profile's proxy. */
 async function lookupExitIp(): Promise<Pick<ProxyWireStatus, 'exitIp' | 'country' | 'city' | 'error'>> {
+  if (!await chrome.permissions.contains({ origins: IP_LOOKUP_ORIGINS })) {
+    return { exitIp: null, error: 'Please open Settings → Proxy → Check IP to allow the IP lookup.' };
+  }
   let lastError = 'lookup failed';
   for (const svc of IP_LOOKUPS) {
     try {
@@ -140,6 +145,13 @@ function readSetting(setting: chrome.types.ChromeSetting, details: chrome.types.
 /** What `proxy_status` reports. Never includes the username or password. */
 export async function proxyStatus(): Promise<ProxyWireStatus> {
   const cfg = await loadProxyConfig();
+  if (!await chrome.permissions.contains({ permissions: ['proxy'] })) {
+    return {
+      enabled: false, server: null, auth: false, control: 'not_granted',
+      webrtcProtected: false, exitIp: null,
+      error: 'Proxy permission is off. To use it, open Settings → Proxy → Save proxy.',
+    };
+  }
   const current = await readSetting(chrome.proxy.settings, { incognito: false });
   const webrtcProtected =
     (await hasPrivacyPermission()) &&

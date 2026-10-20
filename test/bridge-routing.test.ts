@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * Multi-browser routing — the bridge keeps one connection PER profile, so several
  * browsers stay paired at once and a command is routed to its target profile.
@@ -44,7 +46,7 @@ class Fake {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await once(ws, 'open');
     const fake = new Fake(ws, extId);
-    ws.send(JSON.stringify({ type: 'hello', v: PROTOCOL_VERSION, token: TOKEN, ext: { id: extId, version: '1', chrome: '1' }, profile }));
+    ws.send(JSON.stringify({ type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: randomUUID(), v: PROTOCOL_VERSION, token: TOKEN, ext: { id: extId, version: '1', chrome: '1' }, profile }));
     await fake.welcomed;
     return fake;
   }

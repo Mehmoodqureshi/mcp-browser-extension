@@ -229,6 +229,69 @@ test('notification transport errors do not prevent verified access', async (t) =
   assert.equal(h.saved().verified, true);
 });
 
+test('concurrent tool calls use one email prompt without opening chat and browser forms together', async (t) => {
+  for (const mode of ['accept', 'decline', 'cancel', 'unsupported'] as const) {
+    await t.test(mode, async (t) => {
+      const h = setup(t);
+      setAccessPollIntervalForTesting(2, 20);
+      let respond!: () => void;
+      const waitingForInput = new Promise<void>((resolve) => { respond = resolve; });
+      h.server.elicitInput = async () => {
+        h.state.prompts++;
+        await waitingForInput;
+        if (mode === 'unsupported') throw new Error('Client cannot display the email prompt');
+        return mode === 'accept'
+          ? { action: 'accept', content: { email: 'user@example.com' } }
+          : { action: mode };
+      };
+      const calls = Array.from({ length: 8 }, () => requireAccess(h.server, h.dataDir));
+      try {
+        await until(() => h.state.prompts > 0);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(h.state.prompts, 1, 'parallel calls share the pending chat prompt');
+        assert.equal(h.state.browserForms.length, 0, 'no browser form while chat is collecting input');
+        assert.equal(h.state.starts, 0, 'no email before input');
+      } finally {
+        respond();
+      }
+      const responses = await Promise.all(calls);
+      const expected = mode === 'accept' ? /ACCESS_PENDING/ : /ACCESS_INPUT_REQUIRED/;
+      for (const response of responses) assert.match(response!.content[0].text, expected);
+      assert.equal(h.state.prompts, 1);
+      assert.equal(h.state.browserForms.length, mode === 'accept' ? 0 : 1);
+      assert.equal(h.state.starts, mode === 'accept' ? 1 : 0);
+
+      for (let retry = 0; retry < 3; retry++) {
+        const response = await requireAccess(h.server, h.dataDir);
+        assert.match(response!.content[0].text, expected);
+        if (mode !== 'accept') assert.deepEqual(response, responses[0], 'reuse the same fallback URL');
+      }
+      assert.equal(h.state.prompts, 1, 'retries cannot ask for the email again');
+      assert.equal(h.state.browserForms.length, mode === 'accept' ? 0 : 1, 'retries cannot open another tab');
+
+      if (mode !== 'accept') {
+        const url = h.state.browserForms[0];
+        const html = await (await fetch(url)).text();
+        const csrf = html.match(/name="csrf" value="([^"]+)"/)![1];
+        const sent = await fetch(url, {
+          method: 'POST', headers: { origin: new URL(url).origin, 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ email: 'user@example.com', csrf }),
+        });
+        assert.equal(sent.status, 200);
+        assert.match((await requireAccess(h.server, h.dataDir))!.content[0].text, /ACCESS_PENDING/);
+      }
+      assert.equal(h.state.starts, 1);
+      assert.notEqual(h.saved().verified, true, 'neither input method grants access on its own');
+      h.state.status = 'approved';
+      await until(() => h.saved().verified === true);
+      assert.equal(await requireAccess(h.server, h.dataDir), null);
+      assert.equal(h.state.prompts, 1);
+      assert.equal(h.state.starts, 1);
+      assert.equal(h.state.browserForms.length, mode === 'accept' ? 0 : 1);
+    });
+  }
+});
+
 test('a suppressed email dialog offers a browser form instead of a retry loop', async (t) => {
   const h = setup(t);
   h.server.elicitInput = async () => ({ action: 'decline' });
@@ -392,7 +455,14 @@ test('a real MCP tool call receives progress, a verification notification, and i
   configureManager({ policy, makeExecutor: () => executor });
   const server = createServer('test', policy, (server, _dir, request) => requireAccess(server, h.dataDir, request));
   const client = new Client({ name: 'verification-test', version: '1' }, { capabilities: { elicitation: { form: {} } } });
-  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: { email: 'user@example.com' } }));
+  let prompts = 0;
+  let respond!: () => void;
+  const waitingForInput = new Promise<void>((resolve) => { respond = resolve; });
+  client.setRequestHandler(ElicitRequestSchema, async () => {
+    prompts++;
+    await waitingForInput;
+    return { action: 'accept', content: { email: 'user@example.com' } };
+  });
   const notifications: unknown[] = [];
   client.setNotificationHandler(LoggingMessageNotificationSchema, (message) => { notifications.push(message.params.data); });
   const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
@@ -403,7 +473,12 @@ test('a real MCP tool call receives progress, a verification notification, and i
     const call = client.callTool({ name: 'tabs_list', arguments: {} }, undefined, {
       onprogress: (value) => { if (value.message) progress.push(value.message); },
     });
+    await until(() => prompts > 0);
+    assert.equal(h.state.browserForms.length, 0, 'an active chat prompt cannot open a browser form');
+    assert.equal(h.state.starts, 0);
+    respond();
     await until(() => h.state.polls > 0);
+    assert.equal(h.state.browserForms.length, 0, 'accepting the chat prompt cannot open a browser form');
     assert.equal(browserCalls, 0, 'the browser cannot be used before verification');
     h.state.status = 'approved';
     const response = await call;
@@ -414,14 +489,18 @@ test('a real MCP tool call receives progress, a verification notification, and i
     assert.ok(browserCalls > 0);
     assert.ok(progress.some((message) => message.includes('Email verified')));
     assert.ok(notifications.some((value) => (value as { status?: string }).status === 'verified'));
+    assert.equal(prompts, 1);
+    assert.equal(h.state.starts, 1);
+    assert.equal(h.state.browserForms.length, 0);
   } finally {
+    respond();
     await client.close();
     await server.close();
     resetManagerForTesting();
   }
 });
 
-for (const mode of ['auto-decline', 'no-elicitation'] as const) {
+for (const mode of ['auto-decline', 'auto-cancel', 'no-elicitation'] as const) {
   test(`a real MCP client with ${mode} verifies through the browser before tools can run`, async (t) => {
     const h = setup(t);
     setAccessPollIntervalForTesting(2, 20);
@@ -435,10 +514,13 @@ for (const mode of ['auto-decline', 'no-elicitation'] as const) {
     configureManager({ policy, makeExecutor: () => executor });
     const server = createServer('test', policy, (server, _dir, request) => requireAccess(server, h.dataDir, request));
     const client = new Client({ name: 'verification-test', version: '1' }, {
-      capabilities: mode === 'auto-decline' ? { elicitation: { form: {} } } : {},
+      capabilities: mode !== 'no-elicitation' ? { elicitation: { form: {} } } : {},
     });
-    if (mode === 'auto-decline') {
-      client.setRequestHandler(ElicitRequestSchema, async () => { prompts++; return { action: 'decline' }; });
+    if (mode !== 'no-elicitation') {
+      client.setRequestHandler(ElicitRequestSchema, async () => {
+        prompts++;
+        return { action: mode === 'auto-decline' ? 'decline' : 'cancel' };
+      });
     }
     const [clientTx, serverTx] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTx), client.connect(clientTx)]);
@@ -446,12 +528,15 @@ for (const mode of ['auto-decline', 'no-elicitation'] as const) {
     const text = (response: Awaited<ReturnType<typeof call>>) =>
       (response.content as Array<{ text: string }>).map((part) => part.text).join('\n');
     try {
-      const blocked = await call();
+      const blockedCalls = await Promise.all(Array.from({ length: 8 }, () => call()));
+      const blocked = blockedCalls[0];
+      assert.ok(blockedCalls.every((response) => text(response) === text(blocked)));
       assert.equal(blocked.isError, true);
       assert.match(text(blocked), /ACCESS_INPUT_REQUIRED/);
       const url = text(blocked).match(/http:\/\/127\.0\.0\.1:\d+\/verify\/[a-f0-9]+/)![0];
       assert.equal(text(await call()), text(blocked), 'retries reuse the same form');
-      assert.equal(prompts, mode === 'auto-decline' ? 1 : 0);
+      assert.equal(prompts, mode === 'no-elicitation' ? 0 : 1);
+      assert.equal(h.state.browserForms.length, 1, 'parallel calls and retries open only one form');
       assert.equal(browserCalls, 0);
       assert.equal(h.state.starts, 0);
 
@@ -477,6 +562,8 @@ for (const mode of ['auto-decline', 'no-elicitation'] as const) {
       assert.ok(browserCalls > 0);
       assert.equal(h.state.starts, 1);
       assert.equal(h.state.validations, 1);
+      assert.equal(prompts, mode === 'no-elicitation' ? 0 : 1);
+      assert.equal(h.state.browserForms.length, 1);
       await assert.rejects(fetch(url), 'the local form closes after verification');
     } finally {
       await client.close();

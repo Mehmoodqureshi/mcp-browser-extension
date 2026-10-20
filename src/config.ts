@@ -12,6 +12,7 @@ import { join, resolve as resolvePath } from 'node:path';
 import { readFileSync } from 'node:fs';
 
 import { DEFAULT_WS_PORT } from '../shared/protocol';
+import { normalizeDomainPattern } from '../shared/policy';
 import { type Policy, resolvePolicy } from './security/policy';
 import { renamedDirectory, runtimeEnv } from './compat';
 
@@ -195,8 +196,7 @@ export function parseArgs(argv: string[]): CliConfig {
         policyFile = readPolicyFile(requireValue(argv[++i], '--policy'));
         break;
       case '--unsafe-all-domains':
-        policyFlags.allowDomains = ['*'];
-        break;
+        throw new Error('All-site access is no longer supported. Remove --unsafe-all-domains from your MCP configuration and approve websites in the Chrome extension popup.');
       case '--allow-domain':
         (policyFlags.allowDomains ??= []).push(requireValue(argv[++i], '--allow-domain'));
         break;
@@ -313,6 +313,12 @@ export function parseArgs(argv: string[]): CliConfig {
   }
 
   // File first, then flags win.
+  for (const source of [policyFile, policyFlags]) {
+    if (source?.allowDomains !== undefined && (!Array.isArray(source.allowDomains) ||
+      source.allowDomains.some((domain) => typeof domain !== 'string' || !normalizeDomainPattern(domain)))) {
+      throw new Error('Each allowed site must name a website. All-site access is no longer supported; approve websites in the Chrome extension popup.');
+    }
+  }
   const policy = resolvePolicy({ ...policyFile, ...policyFlags });
 
   // Uploads must be confined to a directory — refuse to start with uploads enabled
@@ -482,7 +488,6 @@ Security (default: deny-all safe mode):
                          to <data-dir>/allowed-sites.json; no restart needed)
   --no-site-grants       Ignore sites allowed from the extension's Options page; the
                          allowlist is exactly what these flags and --policy say
-  --unsafe-all-domains   Allow every domain (loud footgun)
   --enable-mutations     Enable click/type/navigate/… (off by default)
   --unsafe-enable-eval   Enable the eval primitive (off by default)
   --enable-downloads     Enable download_file (off by default)

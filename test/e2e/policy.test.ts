@@ -154,10 +154,10 @@ describe('deny-all domains (allowDomains: [])', () => {
   test('navigate is refused with a helpful message and the page is never requested', { skip }, async () => {
     const before = x.log.length;
     const r = await h.call('navigate', { url: `${x.allowed}/secret` });
-    assertDenied(r, /no sites are allowed/i);
+    assertDenied(r, /Please allow access to/i);
     assert.match(textOf(r), /127\.0\.0\.1/, 'names the refused host');
-    assert.match(textOf(r), /toolbar icon/, 'tells the agent how the user can allow it');
-    assert.match(textOf(r), /--allow-domain/, 'names the server flag');
+    assert.match(textOf(r), /MCP Browser Extension icon → Allow next to/, 'shows the one-line approval steps');
+    assert.doesNotMatch(textOf(r), /--unsafe-all-domains|[\r\n]/);
     await sleep(300);
     assert.deepEqual(requests(x, before), [], 'no request reached the page server');
     assert.ok(!(await tabUrls(h)).some((u) => u.includes('/secret')), 'no tab is on the page');
@@ -167,7 +167,7 @@ describe('deny-all domains (allowDomains: [])', () => {
     const { tabId, page } = await openRaw(h, `${x.allowed}/secret`);
     for (const tool of ['get_text', 'get_html', 'snapshot', 'read_as_markdown', 'screenshot']) {
       const r = await h.call(tool, { tabId });
-      assertDenied(r, /no sites are allowed/i);
+    assertDenied(r, /Please allow access to/i);
       assert.doesNotMatch(textOf(r), /SECRET-BODY/, `${tool} leaks nothing`);
     }
     await page.close();
@@ -218,7 +218,7 @@ describe('a host that is not allowlisted (localhost vs 127.0.0.1)', () => {
     const before = x.log.length;
     const r = await h.call('navigate', { url: `${x.other}/secret`, tabId: tab });
     assertDenied(r, /localhost/);
-    assert.match(textOf(r), /Currently allowed: 127\.0\.0\.1/);
+    assert.match(textOf(r), /Allow next to localhost/);
     assertDenied(await h.call('navigate', { url: 'https://example.org/', tabId: tab }), /example\.org/);
     // No tab id given: the gate refuses before an agent tab is even opened.
     assertDenied(await h.call('navigate', { url: `${x.other}/secret` }), /localhost/);
@@ -582,16 +582,18 @@ describe('uploads on with no uploadsDir', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. The extension's own pages, even with every site allowed
+// 5. The extension's own pages remain protected
 // ---------------------------------------------------------------------------
 
-describe("the extension's own pages (allowDomains: ['*'])", () => {
+describe("the extension's own pages", () => {
   let h: Harness;
   let extId: string;
   before(async () => {
     if (skip) return;
-    h = await startHarness({ allowDomains: ['*'] });
+    h = await startHarness();
     extId = new URL(h.sw.url()).host;
+    // Even an explicitly named extension host cannot authorize driving its UI.
+    h.policy.allowDomains.push(extId);
   });
   after(async () => {
     await h?.close();

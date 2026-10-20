@@ -556,9 +556,6 @@ async function serveRemote(
     'Anyone with this URL can drive this Chrome within the allowed sites. Keep it private.',
     'Cut everyone off: restart with --rotate-remote-key.',
     ...(tunnel ? ['The tunnel URL changes every time this starts.'] : []),
-    ...(cfg.policy.allowDomains.includes('*')
-      ? ['', 'WARNING: --unsafe-all-domains is on, so remote clients can reach every site you are signed in to.']
-      : []),
     '',
   ];
   process.stdout.write(`${lines.join('\n')}\n`);

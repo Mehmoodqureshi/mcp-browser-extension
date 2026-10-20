@@ -1,3 +1,5 @@
+import { CLIENT_APPROVAL_CAP } from '../shared/client-auth';
+import { randomUUID } from 'node:crypto';
 /**
  * The per-tab URL cache on an extension connection (src/bridge/connection.ts).
  *
@@ -47,7 +49,8 @@ class FakeExtension {
         v: PROTOCOL_VERSION,
         token: TOKEN,
         ext: { id: 'e', version: '1', chrome: '123' },
-        caps,
+        caps: [...caps, CLIENT_APPROVAL_CAP],
+        approvalChallenge: randomUUID(),
       }),
     );
     await fe.welcomed;
