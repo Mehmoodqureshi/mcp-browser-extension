@@ -61,22 +61,23 @@ jobs:
             npm publish --access public
           fi
 
-      # npm accepts a publish minutes before it serves the version (about 3
-      # minutes for 0.9.12), and the MCP registry validates against what npm
-      # serves. Registering straight after `npm publish` was rejected with
-      # "version not found", so wait until npm answers for this exact version.
+      # npm may accept a publish well before it serves the version. Its
+      # automated validation can take longer than the old 10-minute window,
+      # and a registry delay has also left accepted versions temporarily
+      # unavailable. The MCP registry validates against what npm serves, so
+      # wait for this exact version before continuing.
       - name: Wait for npm to serve the version
         shell: bash
         run: |
           SPEC="${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }}"
-          for i in $(seq 1 40); do
+          for i in $(seq 1 240); do
             if [ "$(npm view "$SPEC" version --prefer-online 2>/dev/null)" = "${{ steps.meta.outputs.version }}" ]; then
               echo "npm serves $SPEC (after ~$(( (i - 1) * 15 ))s)"
               exit 0
             fi
             sleep 15
           done
-          echo "::error::npm still does not serve $SPEC after 10 minutes"
+          echo "::error::npm accepted or is validating $SPEC, but the registry still does not serve it after 60 minutes. Do not publish a replacement version; check npm's Versions page and rerun this workflow after the version becomes available."
           exit 1
 
       # `shell: bash` runs with -eo pipefail. Without pipefail the exit status of

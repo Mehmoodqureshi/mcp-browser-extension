@@ -1,5 +1,11 @@
 # Client approval
 
+Related security steps: [Step 1: App and Website Approval](SECURITY-STEP-1.md),
+[Step 2: Optional Browser Permissions](SECURITY-STEP-2.md),
+[Step 3: Per-Action Approval Decision](SECURITY-STEP-3.md),
+[Step 4: Activity and Stop Access](SECURITY-STEP-4.md), and
+[Step 5: Download and Bridge Hardening](SECURITY-STEP-5.md).
+
 The extension requires a person to approve each new MCP app session in its Chrome
 popup or Settings before it can read or act on browser pages. This is independent of
 email verification, transport pairing, domain restrictions and client permission
