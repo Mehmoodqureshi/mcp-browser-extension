@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -42,6 +42,16 @@ test('rotating, or a malformed file, makes a new key', () => {
   assert.equal(readFileSync(remoteKeyPath(dir), 'utf8').trim(), rotated);
   writeFileSync(remoteKeyPath(dir), 'short');
   assert.match(resolveRemoteKey(dir), /^[A-Za-z0-9_-]{43}$/);
+});
+
+test('remote key permissions are repaired to owner-only when an existing key is loose', () => {
+  if (process.platform === 'win32') return;
+  const dir = tmp();
+  resolveRemoteKey(dir);
+  chmodSync(remoteKeyPath(dir), 0o644);
+  const key = resolveRemoteKey(dir);
+  assert.equal(readFileSync(remoteKeyPath(dir), 'utf8').trim(), key);
+  assert.equal(statSync(remoteKeyPath(dir)).mode & 0o777, 0o600);
 });
 
 test('keyMatches needs the exact key', () => {

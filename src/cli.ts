@@ -428,6 +428,7 @@ async function main(): Promise<void> {
         userDataDir: workspace.profileDir,
         downloadDir: workspace.downloadDir,
         headless: cfg.headless,
+        policy: toWirePolicy(cfg.policy),
       },
     }),
   });

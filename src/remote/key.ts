@@ -8,11 +8,19 @@
  */
 
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const KEY_FILE = 'remote-key';
 const KEY_SHAPE = /^[A-Za-z0-9_-]{43}$/;
+
+function enforcePrivateMode(path: string): void {
+  if (process.platform === 'win32') return;
+  chmodSync(path, 0o600);
+  if ((statSync(path).mode & 0o077) !== 0) {
+    throw new Error(`remote key ${path} is group/other-accessible; refusing to expose the key`);
+  }
+}
 
 export function remoteKeyPath(dataDir: string): string {
   return join(dataDir, KEY_FILE);
@@ -23,11 +31,14 @@ export function resolveRemoteKey(dataDir: string, opts: { rotate?: boolean } = {
   const path = remoteKeyPath(dataDir);
   if (!opts.rotate && existsSync(path)) {
     const stored = readFileSync(path, 'utf8').trim();
-    if (KEY_SHAPE.test(stored)) return stored;
+    if (KEY_SHAPE.test(stored)) {
+      enforcePrivateMode(path);
+      return stored;
+    }
   }
   const key = randomBytes(32).toString('base64url');
   writeFileSync(path, `${key}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600); // a file that already existed keeps its old mode otherwise
+  enforcePrivateMode(path);
   return key;
 }
 

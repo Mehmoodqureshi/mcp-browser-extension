@@ -167,12 +167,16 @@ export async function startHarness(
     ...overrides,
   });
   const token = 'e2e-token';
-  const bridge = new BridgeServer({ token, serverVersion: 'e2e', port: 0, heartbeatMs: 0, policy: toWirePolicy(policy), siteGrants: browserOptions.siteGrants ?? false });
+  const bridge = new BridgeServer({ token, serverVersion: 'e2e', port: 0, heartbeatMs: 0, policy: toWirePolicy(policy), siteGrants: browserOptions.siteGrants ?? false,
+    onLog: (message) => { if (process.env.MBE_E2E_DEBUG) console.error(`[e2e bridge] ${message}`); } });
   const port = await bridge.start();
 
   const userDataDir = mkdtempSync(join(tmpdir(), 'mbe-e2e-chrome-'));
   const extPath = join(userDataDir, 'fixture-extension');
   cpSync(process.env.MBE_EXTENSION_BUILD_DIR ?? join(process.cwd(), 'extension-dist'), extPath, { recursive: true });
+  // A developer's local build may contain a live pairing file written by the
+  // CLI. Never let the disposable test extension connect to that real server.
+  rmSync(join(extPath, 'pairing.json'), { force: true });
   const manifestPath = join(extPath, 'manifest.json');
   const manifestText = readFileSync(manifestPath, 'utf8');
   const backgroundPath = join(extPath, 'background.js');
@@ -209,6 +213,7 @@ export async function startHarness(
   try {
   let [sw] = ctx.serviceWorkers();
   if (!sw) sw = await ctx.waitForEvent('serviceworker', { timeout: 15_000 });
+  if (process.env.MBE_E2E_DEBUG) sw.on('console', (message) => console.error(`[e2e extension] ${message.type()}: ${message.text()}`));
   const extensionId = new URL(sw.url()).hostname;
   if (browserOptions.browserPermissions !== false || browserOptions.legacyPermissions) {
     await sw.evaluate(({ legacy, proxy }) => (globalThis as unknown as { chrome: { storage: { local: { set(v: unknown): Promise<void> } } } }).chrome.storage.local.set(
@@ -248,7 +253,19 @@ export async function startHarness(
       (globalThis as unknown as { chrome: { storage: { local: { set(v: unknown): Promise<void> } } } }).chrome.storage.local.set({ wsPort: p, token: t }),
     [port, token] as [number, string],
   );
-  await waitFor(() => bridge.hasActiveExtension(), 15_000, 'extension to pair');
+  try {
+    await waitFor(() => bridge.hasActiveExtension(), 15_000, 'extension to pair');
+  } catch (err) {
+    if (process.env.MBE_E2E_DEBUG) {
+      const state = await sw.evaluate(async () => {
+        const c = (globalThis as unknown as { chrome: { storage: { local: { get(keys: string[]): Promise<Record<string, unknown>> } } } }).chrome;
+        const saved = await c.storage.local.get(['wsPort', 'connState', 'profile']);
+        return { ...saved, tokenPresent: typeof (await c.storage.local.get(['token'])).token === 'string' };
+      }).catch((e) => ({ inspectionError: String(e) }));
+      console.error(`[e2e pairing] expectedPort=${port} active=${bridge.hasActiveExtension()} state=${JSON.stringify(state)}`);
+    }
+    throw err;
+  }
 
   const grantBrowserPermissions = async (request: { permissions?: string[]; origins?: string[] }): Promise<void> => {
     const options = await ctx.newPage();

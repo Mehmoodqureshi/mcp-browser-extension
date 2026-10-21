@@ -4,7 +4,7 @@ import { buildSync } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import { webcrypto, randomUUID } from 'node:crypto';
 import { createClientIdentity, withClientIdentity, currentClientIdentity } from '../src/bridge/client-identity';
-import { CLIENT_GRANT_MS, CLIENT_REQUEST_MS, type ClientConnection } from '../shared/client-auth';
+import { CLIENT_CLOCK_SKEW_MS, CLIENT_GRANT_MS, CLIENT_REQUEST_MS, type ClientConnection } from '../shared/client-auth';
 import { PROTOCOL_VERSION, type CommandFrame } from '../shared/protocol';
 
 const source = buildSync({ entryPoints: ['extension/src/sw/client-approvals.ts'], bundle: true, write: false, platform: 'browser', format: 'cjs' }).outputFiles[0].text;
@@ -119,6 +119,37 @@ test('expiry and revocation are rechecked after queued work, immediately before 
   const queued = await g.gate.authorize(g.command());
   await g.gate.decide(g.identity.id, false);
   assert.throws(queued, /revoked/);
+});
+
+test('a check issued before revoke stays invalid after that app is approved again', async () => {
+  const f = fixture();
+  await approve(f);
+  const oldCheck = await f.gate.authorize(f.command());
+  await f.gate.decide(f.identity.id, false);
+  await f.gate.decide(f.identity.id, true);
+  assert.throws(oldCheck, /expired, was revoked or disconnected/);
+  (await f.gate.authorize(f.command()))();
+});
+
+test('one unapproved app cannot consume another app\'s replay quota', async () => {
+  const f = fixture();
+  await approve(f);
+  const hostile = createClientIdentity(() => 'Unapproved app');
+  for (let i = 0; i < 4100; i++) {
+    await assert.rejects(f.gate.authorize(f.command(hostile)), i < 4096 ? /Please approve/ : /Too many client commands/);
+  }
+  (await f.gate.authorize(f.command()))();
+});
+
+test('identities rejected at the client cap cannot occupy replay slots for approved apps', async () => {
+  const f = fixture();
+  await approve(f);
+  f.advance(CLIENT_CLOCK_SKEW_MS + 1); // expire the approved app's old replay entry
+  for (let i = 0; i < 64; i++) {
+    const unknown = createClientIdentity(() => `Unknown ${i}`);
+    await assert.rejects(f.gate.authorize(f.command(unknown)), i < 63 ? /Please approve/ : /Too many client connections/);
+  }
+  (await f.gate.authorize(f.command()))();
 });
 
 test('expired requests cannot be approved and old timestamps are rejected', async () => {

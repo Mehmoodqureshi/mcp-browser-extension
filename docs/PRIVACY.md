@@ -110,7 +110,9 @@ is remembered until removed; each app still requires its own unexpired approval.
 Removing either access blocks new commands but cannot undo completed actions.
 
 Cookies and downloads require separate optional permissions, offered only when
-needed under Extra permissions. Proxy authentication and IP lookup permissions
+needed under Extra permissions. Download requests omit browser cookies, refuse
+redirects, and are limited to 50 MiB. Sites that require a signed-in session or
+redirect for a download may refuse the request. Proxy authentication and IP lookup permissions
 are requested from Settings when you enable those features. Chrome does not allow
 `proxy` or `debugger` to be optional. The latter remains required for screenshots
 and trusted input and still carries Chrome's

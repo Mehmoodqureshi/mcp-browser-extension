@@ -5,6 +5,15 @@
 #access-note, #activity-note { font-size: 12px; line-height: 1.5; }
 #access-note[data-error="true"], #activity-note[data-error="true"] { color: #b91c1c; }
 .activity-list { list-style: none; margin: 8px 0; padding: 0; }
+body:not([data-view="popup"]) .activity-list {
+  max-height: 24rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-inline-end: 8px;
+  scrollbar-color: var(--site-primary, #2563eb) #f3f4f6;
+  scrollbar-width: thin;
+}
+body:not([data-view="popup"]) .activity-list:focus-visible { outline: 2px solid var(--site-ring, #2563eb); outline-offset: 2px; }
 .activity-item { border-bottom: 1px solid var(--line, #e6e8ec); overflow-wrap: anywhere; font-size: 12px; }
 .activity-item:last-child { border-bottom: 0; }
 .activity-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 0; cursor: pointer; list-style: none; }

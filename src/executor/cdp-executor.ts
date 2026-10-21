@@ -25,8 +25,10 @@ import {
   chromium,
 } from 'playwright';
 
-import { MAX_DOWNLOAD_BYTES, isWithinSizeCap, sanitizeDownloadName } from '../../shared/download';
+import { sanitizeDownloadName } from '../../shared/download';
+import { evaluatePolicy } from '../../shared/policy';
 import { collectSnapshot } from '../../shared/snapshot';
+import type { WirePolicy } from '../../shared/protocol';
 import { DEFAULT_JPEG_QUALITY, DEFAULT_SCREENSHOT_FORMAT, DEFAULT_SCREENSHOT_SCALE } from '../../shared/screenshot';
 import {
   type ActionOk,
@@ -58,6 +60,7 @@ const STEALTH = `Object.defineProperty(navigator,'webdriver',{get:()=>undefined}
 const NON_CONTENT = /^(file|data|devtools|chrome|about):/i;
 /** Playwright errors that mean the page/context/browser died under us → DETACHED. */
 const CLOSED_TARGET = /Target closed|Browser has been closed|Target page, context or browser has been closed|Execution context was destroyed/i;
+const MAX_CDP_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 
 /** Minimal CSS attribute-value escape for ref selectors (refs are `e\d+`, but be safe). */
 function cssEscape(s: string): string {
@@ -70,6 +73,8 @@ export interface CdpOptions {
   userDataDir: string;
   headless?: boolean;
   downloadDir?: string;
+  /** The same URL/method policy enforced by the MCP tool layer. */
+  policy?: WirePolicy;
 }
 
 // --- lock recovery helpers (ported) ---------------------------------------
@@ -606,34 +611,69 @@ export class CdpExecutor implements Executor {
     const ctx = await this.getContext();
     const dir = this.opts.downloadDir ?? join(this.opts.userDataDir, 'downloads');
     mkdirSync(dir, { recursive: true });
-    const safeName = sanitizeDownloadName(args.suggestedName);
-    const dest = join(dir, safeName);
-    if (args.url) {
-      const resp = await ctx.request.get(args.url);
-      const body = await resp.body();
-      if (!isWithinSizeCap(body.length)) {
-        throw new ExecutorError('DOWNLOAD_FAILED', `download exceeds the ${MAX_DOWNLOAD_BYTES}-byte cap`);
-      }
-      writeFileSync(dest, body);
-      return { path: dest, backend: this.backend, bytes: body.length, mimeType: resp.headers()['content-type'] };
+    let url = args.url ?? '';
+    let suggestedName = args.suggestedName;
+    if (!url) {
+      const p = await this.resolveTab(args.tabId);
+      const target = args.target;
+      if (!target) throw new ExecutorError('DOWNLOAD_FAILED', 'provide a url or a target');
+      const locator = this.locator(p, target);
+      const href = await locator.getAttribute('href');
+      if (!href) throw new ExecutorError('DOWNLOAD_FAILED', 'the target must be a link with an href');
+      const baseUrl = await locator.evaluate((el) => (el as HTMLAnchorElement).ownerDocument.baseURI);
+      try { url = new URL(href, baseUrl).href; }
+      catch { throw new ExecutorError('DOWNLOAD_FAILED', 'the target has an invalid download URL'); }
+      suggestedName = (await locator.getAttribute('download')) || suggestedName;
     }
-    // Element-triggered download.
-    const p = await this.resolveTab(args.tabId);
-    const target = args.target;
-    if (!target) throw new ExecutorError('DOWNLOAD_FAILED', 'provide a url or a target');
-    const [dl] = await Promise.all([p.waitForEvent('download'), this.locator(p, target).click()]);
-    let bytes = 0;
+    const policy = this.opts.policy ?? { allowDomains: [], allowEval: false, allowDownloads: false, allowUploads: false, allowAllTabs: false, enableMutations: false, allowObservers: false };
+    const verdict = evaluatePolicy(url, 'download_file', policy);
+    if (!verdict.ok) throw new ExecutorError('POLICY_DENIED', verdict.reason);
+    let response: Response;
     try {
-      // Surface a cancelled/interrupted download instead of reporting a phantom success.
-      const failure = await dl.failure();
-      if (failure) throw new ExecutorError('DOWNLOAD_FAILED', `download failed: ${failure}`);
-      await dl.saveAs(dest);
-      bytes = statSync(dest).size;
+      // Node fetch has no browser cookie jar; error mode refuses every redirect
+      // before any intermediate destination is contacted.
+      response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(120_000) });
+    } catch {
+      throw new ExecutorError('DOWNLOAD_FAILED', 'download request failed or redirects are not supported');
+    }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new ExecutorError('DOWNLOAD_FAILED', `download returned HTTP ${response.status}`);
+    }
+    const declaredLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_CDP_DOWNLOAD_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new ExecutorError('DOWNLOAD_FAILED', 'download exceeds the 50 MiB limit');
+    }
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          totalBytes += value.byteLength;
+          if (totalBytes > MAX_CDP_DOWNLOAD_BYTES) {
+            await reader.cancel();
+            throw new ExecutorError('DOWNLOAD_FAILED', 'download exceeds the 50 MiB limit');
+          }
+          chunks.push(value);
+        }
+      } catch (err) {
+        await reader.cancel().catch(() => undefined);
+        throw err;
+      }
+    }
+    const body = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes);
+    const safeName = sanitizeDownloadName(suggestedName);
+    const dest = join(dir, safeName);
+    try {
+      writeFileSync(dest, body);
     } catch (err) {
-      if (err instanceof ExecutorError) throw err;
       throw new ExecutorError('DOWNLOAD_FAILED', `failed to save download: ${(err as Error).message}`);
     }
-    return { path: dest, backend: this.backend, bytes, suggestedName: dl.suggestedFilename() };
+    return { path: dest, backend: this.backend, bytes: body.length, mimeType: response.headers.get('content-type') ?? undefined, suggestedName: safeName };
   }
 
   async uploadFile(t: Target, files: string[], opts?: { tabId?: TabId }): Promise<ActionOk> {

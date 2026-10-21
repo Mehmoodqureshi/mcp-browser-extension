@@ -1211,9 +1211,9 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const url = optionalString(a, 'url');
     const target = optionalTarget(a);
     if (!url && !target) throw new McpToolError('provide "url" or a target (selector|ref)');
-    // By URL, the bytes come from that URL with the person's cookies: gate the
-    // URL, not whichever tab the agent is on. By element, gate the tab it is in
-    // (the extension then gates where the link leads).
+    // By URL, gate the destination rather than whichever tab the agent is on.
+    // For links, the extension/CDP executor also gates the resolved href before
+    // fetching it; downloads omit browser cookies and refuse redirects.
     await gate(ctx, 'download_file', url ? { url } : { tabId: tabId(a) });
     return jsonResult(
       await ctx.ex.download({ url, target, tabId: tabId(a), suggestedName: optionalString(a, 'suggestedName') }),

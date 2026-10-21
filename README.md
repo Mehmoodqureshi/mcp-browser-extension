@@ -236,7 +236,10 @@ Removing the website also removes its Chrome permission. Existing server flags
 do not grant Chrome access, and an upgrade may ask you to approve websites again.
 
 Cookies and downloads ask separately under **Extra permissions** when needed.
-They start off, and their buttons also let you remove permission. Proxy
+They start off, and their buttons also let you remove permission. Downloads are
+fetched without browser cookies, redirects are refused, and files are limited to
+50 MiB. Links that require a signed-in browser session or redirect may not
+work. Proxy
 authentication and IP lookups request permission from Settings. Chrome does not
 support making `debugger` or `proxy` optional; those remain required, and debugger
 commands still check website permission before they run.

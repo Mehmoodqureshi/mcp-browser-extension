@@ -83,7 +83,7 @@
       ul { list-style: none; margin: 0; padding: 0; }
       .access-list[data-overflow] { max-height: var(--list-height); overflow-y: auto; overflow-x: hidden; padding-right: 10px; scrollbar-gutter: stable; }
       .access-list:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-      .access-list[data-overflow] button:focus-visible { outline-offset: -2px; }
+      .access-list[data-overflow] button:focus-visible, .access-list[data-overflow] summary:focus-visible { outline-offset: -2px; }
 
       /* App connections */
       #client-connections li { display: grid; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
@@ -215,10 +215,10 @@
 
       <section class="card" id="activity-section">
         <h2>Recent activity</h2>
-        <ul id="activity-list" class="activity-list" aria-label="Recent activity"></ul>
+        <ul id="activity-list" class="activity-list access-list" aria-label="Recent activity"></ul>
         <p class="note" id="activity-note" role="status"></p>
         <div class="activity-actions">
-          <button id="activity-all">View all in Settings</button>
+          <button id="activity-all">Open full history</button>
           <button id="activity-clear" class="ghost">Clear history</button>
         </div>
         <details class="activity-help">

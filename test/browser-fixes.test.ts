@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 
 import { CdpExecutor } from '../src/executor/cdp-executor';
@@ -28,12 +29,24 @@ try {
 test('FIX 4: an element download whose save fails surfaces DOWNLOAD_FAILED', { skip: !hasChromium }, async () => {
   const profile = mkdtempSync(join(tmpdir(), 'cmcp-dlprofile-'));
   const dlDir = mkdtempSync(join(tmpdir(), 'cmcp-dl-'));
-  const ex = new CdpExecutor({ mode: 'launch', userDataDir: profile, headless: true, downloadDir: dlDir });
+  const server = createServer((req, res) => {
+    if (req.url === '/file') {
+      res.setHeader('Content-Disposition', 'attachment; filename="x.bin"');
+      res.end('ABCDEF');
+    } else {
+      res.setHeader('Content-Type', 'text/html');
+      res.end('<a id="d" download="x.bin" href="/file">dl</a>');
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const ex = new CdpExecutor({ mode: 'launch', userDataDir: profile, headless: true, downloadDir: dlDir,
+    policy: { allowDomains: ['127.0.0.1'], allowEval: false, allowDownloads: true, allowUploads: false, allowAllTabs: false, enableMutations: false, allowObservers: false } });
   try {
     await ex.ensureReady();
-    // A page whose link triggers a real download ("ABCDEF").
-    const href = 'data:application/octet-stream;base64,QUJDREVG';
-    await ex.navigate({ url: `data:text/html,<a id="d" download="x.bin" href="${href}">dl</a>` });
+    // A local permitted page whose link triggers a real download ("ABCDEF").
+    await ex.navigate({ url: `http://127.0.0.1:${address.port}/` });
     // Force the save to fail deterministically: pre-create a DIRECTORY at the dest
     // path so writing the file over it throws — exercising FIX 4's try/catch.
     const dest = join(dlDir, sanitizeDownloadName('x.bin'));
@@ -44,6 +57,7 @@ test('FIX 4: an element download whose save fails surfaces DOWNLOAD_FAILED', { s
     );
   } finally {
     await ex.dispose();
+    await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
   }
 });
 

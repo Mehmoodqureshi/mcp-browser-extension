@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { configureManager, getManager } from '../src/executor/manager';
 import { CdpExecutor } from '../src/executor/cdp-executor';
 import { dispatchToolCall } from '../src/mcp/tools';
-import { resolvePolicy } from '../src/security/policy';
+import { resolvePolicy, toWirePolicy } from '../src/security/policy';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 import { decideScenario } from './gating';
@@ -46,7 +46,7 @@ export async function runHitl(targets: Targets, opts: RunOptions): Promise<Outco
   const userDataDir = mkdtempSync(join(tmpdir(), 'cmcp-hitl-'));
   configureManager({
     policy,
-    makeExecutor: () => new CdpExecutor({ mode: 'launch', userDataDir, headless: opts.headless }),
+    makeExecutor: () => new CdpExecutor({ mode: 'launch', userDataDir, headless: opts.headless, policy: toWirePolicy(policy) }),
   });
 
   try {

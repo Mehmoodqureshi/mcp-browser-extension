@@ -42,6 +42,9 @@ export { CmdError } from './cmd-error';
 
 /** Max time we wait for a download to finish before reporting failure. */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+// Downloads are fetched by the extension without page cookies. Buffering is
+// bounded because MV3 service workers cannot write a response stream to disk.
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 
 /**
  * Resolve when download `id` reaches state `complete`; reject on `interrupted`
@@ -1444,7 +1447,67 @@ export class ChromeExecutor {
         const name = sanitizeDownloadName(
           typeof cmd.params.suggestedName === 'string' ? cmd.params.suggestedName : undefined,
         );
-        const downloadId = await chrome.downloads.download({ url, filename: name });
+        // chrome.downloads.download follows redirects with browser credentials.
+        // Refuse redirects entirely and omit cookies so a download cannot make
+        // even an anonymous request to an unapproved intermediate host.
+        let response: Response;
+        try {
+          response = await fetch(url, { credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) });
+        } catch {
+          throw new CmdError('DOWNLOAD_FAILED', 'download request failed or its redirect was not permitted');
+        }
+        if (!response.url) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new CmdError('DOWNLOAD_FAILED', 'download did not resolve to a valid address');
+        }
+        try { await this.assertAllowed(response.url, 'download_file'); }
+        catch (err) { await response.body?.cancel().catch(() => undefined); throw err; }
+        if (!response.ok) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new CmdError('DOWNLOAD_FAILED', `download returned HTTP ${response.status}`);
+        }
+        const declaredLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredLength) && declaredLength > MAX_DOWNLOAD_BYTES) {
+          await response.body?.cancel().catch(() => undefined);
+          throw new CmdError('DOWNLOAD_FAILED', 'download exceeds the 50 MiB extension limit');
+        }
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+        const reader = response.body?.getReader();
+        if (reader) {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              totalBytes += value.byteLength;
+              if (totalBytes > MAX_DOWNLOAD_BYTES) {
+                await reader.cancel();
+                throw new CmdError('DOWNLOAD_FAILED', 'download exceeds the 50 MiB extension limit');
+              }
+              chunks.push(value);
+            }
+          } catch (err) {
+            await reader.cancel().catch(() => undefined);
+            throw err;
+          }
+        }
+        const bytesView = new Uint8Array(totalBytes);
+        let copied = 0;
+        for (const chunk of chunks) { bytesView.set(chunk, copied); copied += chunk.byteLength; }
+        const encoded: string[] = [];
+        // Keep each temporary binary string small and align chunks to complete
+        // Base64 triplets so padding appears only at the end.
+        const base64ChunkBytes = 0x6000;
+        for (let offset = 0; offset < bytesView.length; offset += base64ChunkBytes) {
+          const end = Math.min(bytesView.length, offset + base64ChunkBytes);
+          let binary = '';
+          for (let i = offset; i < end; i += 0x4000) {
+            binary += String.fromCharCode(...bytesView.subarray(i, Math.min(end, i + 0x4000)));
+          }
+          encoded.push(btoa(binary));
+        }
+        const dataUrl = `data:application/octet-stream;base64,${encoded.join('')}`;
+        const downloadId = await chrome.downloads.download({ url: dataUrl, filename: name, saveAs: false });
         const item = await waitForDownloadComplete(downloadId);
         const bytes = item.fileSize > 0 ? item.fileSize : item.bytesReceived;
         return {

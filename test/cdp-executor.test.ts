@@ -42,6 +42,7 @@ const PAGES: Record<string, { type: string; body: string; headers?: Record<strin
       <div id="hov" onmouseover="this.textContent='hovered'">hover me</div>
       <input id="file" type="file" multiple>
       <a id="dl" href="/file.txt" download="saved.txt">Download</a>
+      <a id="redirect-dl" href="/redirect-file" download="redirect.txt">Redirect download</a>
       <canvas id="cv" width="200" height="200" style="border:1px solid"></canvas>
       <div style="height:3000px"></div><div id="bottom">Bottom</div>
       <script>
@@ -65,10 +66,26 @@ const PAGES: Record<string, { type: string; body: string; headers?: Record<strin
 
 let server: Server;
 let base = '';
+let requestLog: Array<{ host: string; path: string }> = [];
 
 before(async () => {
   server = createServer((req, res) => {
-    const page = PAGES[(req.url ?? '/').split('?')[0]];
+    const path = (req.url ?? '/').split('?')[0];
+    requestLog.push({ host: req.headers.host ?? '', path });
+    if (path === '/redirect-file') {
+      res.writeHead(302, { location: `http://localhost:${(server.address() as AddressInfo).port}/redirect-target` }).end();
+      return;
+    }
+    if (path === '/redirect-target') {
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('must not be requested');
+      return;
+    }
+    if (path === '/base-link') {
+      const port = (server.address() as AddressInfo).port;
+      res.writeHead(200, { 'content-type': 'text/html' }).end(`<head><base href="http://localhost:${port}/"></head><a id="base-dl" href="redirect-target">Download</a>`);
+      return;
+    }
+    const page = PAGES[path];
     if (!page) {
       res.writeHead(404).end('nope');
       return;
@@ -248,7 +265,11 @@ test('CdpExecutor: interaction, storage, eval, waits, cookies and screenshots', 
 
 test('CdpExecutor: downloads and uploads', { skip: !hasChromium }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cmcp-cdpx-'));
-  const ex = new CdpExecutor({ mode: 'launch', userDataDir: dir, headless: true });
+  requestLog = [];
+  const ex = new CdpExecutor({ mode: 'launch', userDataDir: dir, headless: true, policy: {
+    allowDomains: ['127.0.0.1'], allowEval: false, allowDownloads: true, allowUploads: false,
+    allowAllTabs: false, enableMutations: false, allowObservers: false,
+  } });
   try {
     await ex.navigate({ url: `${base}/` });
     const byUrl = await ex.download({ url: `${base}/file.txt`, suggestedName: '../evil name.txt' });
@@ -263,6 +284,19 @@ test('CdpExecutor: downloads and uploads', { skip: !hasChromium }, async () => {
     assert.equal(byClick.suggestedName, 'saved.txt');
     assert.equal(byClick.bytes, 14);
     assert.equal(readFileSync(byClick.path, 'utf8'), 'hello download');
+
+    await assert.rejects(ex.download({ url: `${base}/redirect-file` }), errCode('DOWNLOAD_FAILED'));
+    assert.ok(!requestLog.some((request) => request.host.startsWith('localhost:') && request.path === '/redirect-target'),
+      'redirect target is not contacted');
+    await assert.rejects(ex.download({ target: { selector: '#redirect-dl' } }), errCode('DOWNLOAD_FAILED'));
+    assert.ok(!requestLog.some((request) => request.host.startsWith('localhost:') && request.path === '/redirect-target'),
+      'link-triggered redirect target is not contacted');
+
+    await ex.navigate({ url: `${base}/base-link` });
+    await assert.rejects(ex.download({ target: { selector: '#base-dl' } }), errCode('POLICY_DENIED'));
+    assert.ok(!requestLog.some((request) => request.host.startsWith('localhost:') && request.path === '/redirect-target'),
+      'link URL is resolved against its base element before policy evaluation');
+    await ex.navigate({ url: `${base}/` });
 
     await assert.rejects(ex.download({}), errCode('DOWNLOAD_FAILED'));
 

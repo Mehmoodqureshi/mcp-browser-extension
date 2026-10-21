@@ -79,6 +79,29 @@
       <p class="hint" id="client-note" role="status" aria-live="polite"></p>
     </section>
 
+    <section id="blocked-wrap" hidden>
+      <h2>Website access</h2>
+      <p class="hint">Allow lets approved apps read and act here, including sending, deleting and buying. Accept Chrome’s prompt if shown.</p>
+      <ul class="sites blocked" id="blocked"></ul>
+    </section>
+
+    <section id="sites-section">
+      <h2>Allowed sites</h2>
+      <p class="hint">
+        MCP Browser Extension only reads or acts on sites you allow. Allowing one here applies at once to every
+        approved app session, with no restart, and is remembered. Click Allow, then accept Chrome’s
+        website permission request if shown. Remove also removes Chrome’s website permission.
+      </p>
+      <p class="hint">Allowing a site lets approved apps read and take actions there, including sending, deleting and buying, without a separate approval for each action. Remove access whenever you want to stop new actions.</p>
+      <ul class="sites" id="allowed"></ul>
+      <p class="hint" id="sites-note"></p>
+      <label for="new-site">Allow a site</label>
+      <div class="row">
+        <input id="new-site" type="text" placeholder="example.com or *.example.com" />
+        <button id="add-site">Allow</button>
+      </div>
+    </section>
+
     <section id="activity-section">
       <h2>Recent activity</h2>
       <label for="activity-filter">Show requests</label>
@@ -90,7 +113,7 @@
         <option value="failed">Failed</option>
         <option value="interrupted">Interrupted</option>
       </select>
-      <ul id="activity-list" class="activity-list" aria-label="Recent activity"></ul>
+      <ul id="activity-list" class="activity-list" aria-label="Recent activity" tabindex="0"></ul>
       <p class="hint" id="activity-note" role="status"></p>
       <div class="activity-actions"><button id="activity-clear">Clear history</button></div>
       <details class="activity-help">
@@ -101,59 +124,47 @@
       </details>
     </section>
 
-    <p class="hint" id="manual-intro">Or pair by hand:</p>
-    <p class="hint" id="source">Checking pairing source…</p>
-    <p class="hint">
-      Manual pairing: run <code>npx -y mcp-browser-extension@latest --print-pairing</code>,
-      open the printed <code>handshake.json</code>, and paste its <code>port</code>
-      and <code>token</code> below.
-    </p>
-    <label for="port">Port</label>
-    <input id="port" type="number" inputmode="numeric" placeholder="38017" />
-    <label for="token">Token</label>
-    <input id="token" type="password" placeholder="leave blank to keep the current token" />
-    <label for="profile">Profile</label>
-    <input id="profile" type="text" placeholder="automatic" />
-    <p class="hint">
-      Optional. Leave blank and the server names this browser for you — the first is
-      <code>default</code>, then <code>profile-2</code>, <code>profile-3</code>… — and
-      remembers it. Rename one with <code>profile_rename</code>, switch with
-      <code>profile_use</code>. Type a name here only to pin one yourself.
-    </p>
-    <p class="hint" id="paired-as"></p>
-    <label class="check"><input id="tab-border" type="checkbox" checked /> Outline the tabs the agent is working in</label>
-    <p class="hint">
-      A border in the page's theme colour (blue when the site has none) marks every tab the
-      agent is driving. It never shows in screenshots or PDFs, and is removed when the server disconnects.
-    </p>
-    <button id="save">Save & connect</button>
-    <div class="status" id="status">Status: unknown</div>
-
-    <section id="sites-section">
-      <h2>Allowed sites</h2>
-      <p class="hint">
-        MCP Browser Extension only reads or acts on sites you allow. Allowing one here applies at once to every
-        approved app session, with no restart, and is remembered. Click Allow, then accept Chrome’s
-        website permission request if shown. Remove also removes Chrome’s website permission.
-      </p>
-      <p class="hint">Allowing a site lets approved apps read and take actions there, including sending, deleting and buying, without a separate approval for each action. Remove access whenever you want to stop new actions.</p>
-      <div id="blocked-wrap" hidden>
-        <p><strong>Recently blocked</strong></p>
-        <ul class="sites blocked" id="blocked"></ul>
-      </div>
-      <ul class="sites" id="allowed"></ul>
-      <p class="hint" id="sites-note"></p>
-      <label for="new-site">Allow a site</label>
-      <div class="row">
-        <input id="new-site" type="text" placeholder="example.com or *.example.com" />
-        <button id="add-site">Allow</button>
-      </div>
-    </section>
     <section id="extra-permissions" hidden>
       <h2>Extra permissions</h2>
       <ul class="sites" id="extra-permissions-list"></ul>
       <p class="hint" id="extra-permissions-note" role="status" aria-live="polite"></p>
     </section>
+
+    <section id="appearance-section">
+      <h2>Appearance</h2>
+      <label class="check"><input id="tab-border" type="checkbox" checked /> Outline the tabs the agent is working in</label>
+      <p class="hint">
+        A border in the page's theme colour (blue when the site has none) marks every tab the
+        agent is driving. It never shows in screenshots or PDFs, and is removed when the server disconnects.
+      </p>
+    </section>
+
+    <section id="connection-settings">
+      <h2>Manual connection</h2>
+      <p class="hint" id="manual-intro">Use these fields to pair by hand:</p>
+      <p class="hint" id="source">Checking pairing source…</p>
+      <p class="hint">
+        Manual pairing: run <code>npx -y mcp-browser-extension@latest --print-pairing</code>,
+        open the printed <code>handshake.json</code>, and paste its <code>port</code>
+        and <code>token</code> below.
+      </p>
+      <label for="port">Port</label>
+      <input id="port" type="number" inputmode="numeric" placeholder="38017" />
+      <label for="token">Token</label>
+      <input id="token" type="password" placeholder="leave blank to keep the current token" />
+      <label for="profile">Profile</label>
+      <input id="profile" type="text" placeholder="automatic" />
+      <p class="hint">
+        Optional. Leave blank and the server names this browser for you — the first is
+        <code>default</code>, then <code>profile-2</code>, <code>profile-3</code>… — and
+        remembers it. Rename one with <code>profile_rename</code>, switch with
+        <code>profile_use</code>. Type a name here only to pin one yourself.
+      </p>
+      <p class="hint" id="paired-as"></p>
+      <button id="save">Save & connect</button>
+      <div class="status" id="status">Status: unknown</div>
+    </section>
+
     <section id="proxy-section">
       <h2>Proxy</h2>
       <p class="hint">

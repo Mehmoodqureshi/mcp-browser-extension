@@ -32,7 +32,7 @@ export class ClientApprovals {
   private queuedCommands = 0;
   private readonly revoking = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly nonces = new Map<string, number>();
+  private readonly nonces = new Map<string, Map<string, number>>();
   private readonly now: () => number;
 
   constructor(private readonly deps: ApprovalDeps) { this.now = deps.now ?? Date.now; }
@@ -92,11 +92,6 @@ export class ClientApprovals {
         if (!valid) return denied('Client signature is invalid. Browser access is blocked.');
         id = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', der)), (b) => b.toString(16).padStart(2, '0')).join('');
       } catch { return denied('Client signature is invalid. Browser access is blocked.'); }
-      for (const [nonce, expires] of this.nonces) if (expires < now) this.nonces.delete(nonce);
-      const replayKey = `${id}:${p.nonce}`;
-      if (this.nonces.has(replayKey)) return denied('Replayed client command refused.');
-      if (this.nonces.size >= MAX_NONCES) return denied('Too many client commands. Wait two minutes and retry.');
-      this.nonces.set(replayKey, p.issuedAt + CLIENT_CLOCK_SKEW_MS);
       let client = this.clients.find((c) => c.id === id);
       if (client && (client.publicKey !== p.publicKey || client.name !== p.name)) {
         return denied('Client identity changed. Start a new connection and approve it in Chrome.');
@@ -111,12 +106,24 @@ export class ClientApprovals {
         client = { id, publicKey: p.publicKey, name: p.name, state: 'pending', requestedAt: now, expiresAt: now + CLIENT_REQUEST_MS };
         try { await this.save([...live, client]); } catch { return denied('Cannot save the approval request. Browser access is blocked.'); }
       }
+      // Only persisted client records get replay buckets. This keeps arbitrary
+      // signed identities from occupying slots before the MAX_CLIENTS gate.
+      for (const [clientId, seen] of this.nonces) {
+        for (const [nonce, expires] of seen) if (expires < now) seen.delete(nonce);
+        if (!seen.size) this.nonces.delete(clientId);
+      }
+      let seen = this.nonces.get(id);
+      if (!seen) { seen = new Map(); this.nonces.set(id, seen); }
+      if (seen.has(p.nonce)) return denied('Replayed client command refused.');
+      if (seen.size >= MAX_NONCES) return denied('Too many client commands from this app. Wait two minutes and retry.');
+      seen.set(p.nonce, p.issuedAt + CLIENT_CLOCK_SKEW_MS);
       if (client.state !== 'approved') {
         return denied(`Please approve "${client.name}" (check key ${id.slice(0, 12)}): Chrome → MCP Browser Extension icon → App connections → Approve for 8 hours.`);
       }
+      const authorizedGrant = client;
       const check = (): void => {
         const grant = this.clients.find((c) => c.id === id);
-        if (this.storageFault || this.revokingAll || this.revoking.has(id) || p.challenge !== this.deps.challenge() || !grant || grant.state !== 'approved' || grant.expiresAt <= this.now()) {
+        if (this.storageFault || this.revokingAll || this.revoking.has(id) || p.challenge !== this.deps.challenge() || grant !== authorizedGrant || grant.state !== 'approved' || grant.expiresAt <= this.now()) {
           denied('Client access expired, was revoked or disconnected. Approve the connection in Chrome before retrying.');
         }
       };

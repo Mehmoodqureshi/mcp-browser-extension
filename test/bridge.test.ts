@@ -63,6 +63,34 @@ async function startServer(token = TOKEN): Promise<ServerHarness> {
   return { server, port, logs, displacements };
 }
 
+test('bridge rejects web page origins before upgrade but accepts extension origins', async () => {
+  const { server, port } = await startServer();
+  try {
+    const web = new WebSocket(`ws://127.0.0.1:${port}`, { origin: 'https://attacker.example' });
+    const [, response] = await once(web, 'unexpected-response');
+    assert.equal(response.statusCode, 401);
+    const extension = new WebSocket(`ws://127.0.0.1:${port}`, { origin: `chrome-extension://${'a'.repeat(32)}` });
+    await once(extension, 'open');
+    extension.close();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('bridge closes oversized frames at its 4 MiB protocol limit', async () => {
+  const { server, port } = await startServer();
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await once(ws, 'open');
+    const closed = once(ws, 'close');
+    ws.send('x'.repeat(4 * 1024 * 1024 + 1));
+    const [code] = await closed;
+    assert.equal(code, 1009);
+  } finally {
+    await server.stop();
+  }
+});
+
 /** A minimal fake of the MV3 extension's WS client. */
 class FakeExtension {
   onCommand: ((cmd: { id: string; method: string; params: Record<string, unknown> }) => void) | null = null;

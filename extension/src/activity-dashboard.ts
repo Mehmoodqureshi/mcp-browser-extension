@@ -113,7 +113,9 @@ function control(id: string, type: string, note: HTMLElement): void {
 control('access-stop', 'access_stop', accessNote);
 control('access-resume', 'access_resume', accessNote);
 control('activity-clear', 'activity_clear', historyNote);
-document.getElementById('activity-all')?.addEventListener('click', () => void chrome.runtime.openOptionsPage());
+document.getElementById('activity-all')?.addEventListener('click', () => {
+  void chrome.tabs.create({ url: `${chrome.runtime.getURL('options.html')}#activity-section` });
+});
 filter?.addEventListener('change', () => void renderHistory());
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[ACCESS_STOPPED_KEY]) void renderAccess();

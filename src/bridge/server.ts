@@ -120,6 +120,13 @@ const MAX_PREAUTH_FRAMES = 10;
 const PORT_WAIT_MS = 4_000;
 /** Pause between port-bind retries while waiting for the old listener to exit. */
 const PORT_RETRY_MS = 250;
+/** Bridge frames are small JSON control messages; cap unauthenticated memory use. */
+const MAX_BRIDGE_FRAME_BYTES = 4 * 1024 * 1024;
+
+/** Native clients omit Origin; Chrome extensions use their own isolated origin. */
+function allowBridgeOrigin(origin: string | undefined): boolean {
+  return origin === undefined || /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
+}
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
@@ -389,7 +396,13 @@ export class BridgeServer {
   /** One bind attempt. Resolves with a listening server or rejects with the listen error. */
   private listenOnce(host: string, port: number): Promise<WebSocketServer> {
     return new Promise((resolve, reject) => {
-      const wss = new WebSocketServer({ host, port });
+      const wss = new WebSocketServer({
+        host,
+        port,
+        maxPayload: MAX_BRIDGE_FRAME_BYTES,
+        perMessageDeflate: false,
+        verifyClient: ({ origin }: { origin: string }) => allowBridgeOrigin(origin || undefined),
+      });
       const onError = (err: Error): void => {
         wss.off('listening', onListening);
         // Close so the failed server doesn't linger and leak a handle on retry.

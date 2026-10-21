@@ -34,6 +34,7 @@ const EXTRA: Record<string, string> = {
   '/upload': `<!doctype html><title>Upload</title><input id="file" type="file" onchange="document.getElementById('picked').textContent = this.files[0] ? this.files[0].name + ':' + this.files[0].size : ''"><div id="picked"></div>`,
   '/console': `<!doctype html><title>Console</title><script>console.log('E2E-LOG');</script>`,
   '/download': `<!doctype html><title>Download</title><a id="dl" href="/file.txt" download="file.txt">get</a>`,
+  '/download-file': `<!doctype html><title>Download</title>`,
 };
 
 interface Extra {
@@ -44,18 +45,36 @@ interface Extra {
   other: string;
   /** Every request seen, as "host path". */
   log: string[];
+  cookies: string[];
   close(): void;
 }
 
 async function startExtra(): Promise<Extra> {
   const log: string[] = [];
+  const cookies: string[] = [];
   let port = 0;
   const server: Server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '/').split('?')[0];
     log.push(`${req.headers.host ?? ''} ${path}`);
+    cookies.push(`${req.headers.host ?? ''} ${path} ${req.headers.cookie ?? ''}`);
     if (path === '/redir') {
       res.writeHead(302, { location: `http://localhost:${port}/secret` });
       res.end();
+      return;
+    }
+    if (path === '/download-redir') {
+      res.writeHead(302, { location: `http://localhost:${port}/download-secret` });
+      res.end();
+      return;
+    }
+    if (path === '/download-secret') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="secret.bin"' });
+      res.end('UNAPPROVED-SITE-PRIVATE-FIXTURE');
+      return;
+    }
+    if (path === '/download-large-stream') {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.end(Buffer.alloc(51 * 1024 * 1024, 0x61));
       return;
     }
     if (path === '/file.txt') {
@@ -80,6 +99,7 @@ async function startExtra(): Promise<Extra> {
     allowed: `http://127.0.0.1:${port}`,
     other: `http://localhost:${port}`,
     log,
+    cookies,
     close: () => server.close(),
   };
 }
@@ -329,6 +349,26 @@ describe('a host that is not allowlisted (localhost vs 127.0.0.1)', () => {
     assert.equal(r.ok, false, 'the extension refuses the landed page too');
     assert.doesNotMatch(textOf(nav), /SECRET-BODY/, 'navigate does not return the body');
     await h.call('tab_close', { tabId: tab });
+  });
+
+  test('download redirect to localhost sends no browser cookie and returns no file', { skip }, async () => {
+    await h.ctx.addCookies([{ name: 'session', value: 'must-not-leak', domain: 'localhost', path: '/', httpOnly: true }]);
+    const before = x.log.length;
+    const r = await h.call('download_file', { url: `${x.allowed}/download-redir` });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /DOWNLOAD_FAILED/);
+    await sleep(150);
+    assert.ok(!requests(x, before).includes(`localhost:${x.port} /download-secret`), 'redirect destination was never contacted');
+    assert.doesNotMatch(textOf(r), /UNAPPROVED-SITE-PRIVATE-FIXTURE|sourcePath|downloadId/);
+    const destination = x.cookies.find((entry) => entry.startsWith(`localhost:${x.port} /download-secret`));
+    assert.equal(destination, undefined);
+  });
+
+  test('download without Content-Length is stopped at the streaming size limit', { skip }, async () => {
+    const r = await h.call('download_file', { url: `${x.allowed}/download-large-stream` });
+    assert.equal(r.isError, true);
+    assert.match(textOf(r), /DOWNLOAD_FAILED.*50 MiB/);
+    assert.doesNotMatch(textOf(r), /sourcePath|downloadId/);
   });
 
   test(
