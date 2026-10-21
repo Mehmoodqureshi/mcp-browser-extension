@@ -1,3 +1,9 @@
+## 0.9.33 - 2026-10-21
+
+Reissues the browser-access hardening from 0.9.32 under a fresh package
+version after npm reserved 0.9.32 without making it publicly available. The
+Chrome extension remains at 0.9.32; its code is unchanged.
+
 ## 0.9.32 - 2026-10-21
 
 Site access and activity are easier to review, and browser actions have tighter
