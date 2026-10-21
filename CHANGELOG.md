@@ -1,3 +1,18 @@
+## 0.9.32 - 2026-10-21
+
+Site access and activity are easier to review, and browser actions have tighter
+security checks.
+
+- feat: the extension popup shows recent activity by website, with a link to the
+  full history and clearer allowed/blocked site controls.
+- security: downloads omit browser cookies, refuse redirects, check the resolved
+  destination against the site policy, and stop at 50 MiB.
+- security: a delayed command stays invalid after its app is revoked, even if
+  that app is approved again. Replay limits are isolated per app.
+- security: the local bridge rejects web page Origins and oversized frames;
+  remote-access key files are kept owner-only.
+- extension: 0.9.32; a new Chrome Web Store ZIP is required.
+
 ## 0.9.31 - 2026-10-20
 
 Email verification works when the client's input prompt is suppressed,
