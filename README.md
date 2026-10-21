@@ -630,7 +630,7 @@ PDF is megabytes of base64 no model can read.
 ### Paying less per turn — `--tools`
 
 Every MCP server you connect costs context before you ask it anything: the host
-sends the whole tool catalog to the model on **every** turn. MCP Browser Extension's 40
+sends the whole tool catalog to the model on **every** turn. MCP Browser Extension's 43
 tools are 28 KB of JSON Schema, about 7.1k tokens, on each one.
 
 Most runs need a handful of them. `--tools` advertises only those:
@@ -652,7 +652,7 @@ for a run that was never going to print a PDF or upload a file.
   `--unsafe-enable-eval`.
 - An unknown name fails at startup and prints the catalog, so a typo can never
   quietly drop `click` from the surface.
-- `mcp-browser-extension --help` prints the full catalog of 42 names to pick from.
+- `mcp-browser-extension --help` prints the full catalog of 43 names to pick from.
 
 ## Status
 
