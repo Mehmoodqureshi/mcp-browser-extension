@@ -1,3 +1,21 @@
+## 0.9.34 - 2026-10-22
+
+Approvals no longer need the agent to keep checking, and the popup comes back
+after Chrome's site prompt.
+
+- feat: a tool call refused only because the app needs approval or a website
+  needs allowing now waits up to 45 seconds and continues on its own once the
+  person clicks Approve or Allow, with progress updates. If the wait runs out,
+  calling the same tool again keeps waiting.
+- feat: agent instructions explain this wait and that Chrome Web Store pages can
+  never be read by an extension, so agents do not ask people to allow them.
+- feat: after Chrome's own Allow/Deny prompt for a website closes the toolbar
+  popup, the extension reopens it.
+- breaking: Node 20 or newer is required. Node 18 is end-of-life and no longer
+  tested.
+- test: fixed a flaky tunnel test that could hang the unit run, and a wrong page
+  address check in the activity history browser test.
+
 ## 0.9.33 - 2026-10-21
 
 Reissues the browser-access hardening from 0.9.32 under a fresh package
