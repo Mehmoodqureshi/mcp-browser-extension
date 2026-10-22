@@ -35,6 +35,7 @@ import {
   truncationMeta,
 } from './limits';
 import { runBatch } from './batch';
+import { waitForPerson } from './person-wait';
 import { extractLinks, fillForm, readAsMarkdown } from './helpers';
 import { compileRedactionPattern, NO_REDACTION, redactHtml, redactText, type RedactionConfig } from './redact';
 import { resolveLocator, hasLocator, type Locator } from './locate';
@@ -1682,14 +1683,22 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
           onVerified: () => { verifiedNow = true; },
         });
         if (accessError) return accessError;
-        if (profileBridge?.hasActiveExtension()) {
-          const active = peekActiveWorkspace()?.profile ?? 'default';
-          const profile = profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name;
-          try {
-            await profileBridge.sendCommand('ping_probe', { requireClientApproval: true }, { profile });
-          } catch (err) { return errorResult(err instanceof Error ? err.message : 'Chrome client approval is required.'); }
-        }
-        const result = await dispatchToolCall(d.name, args);
+        // Approval and site refusals run nothing, so the call waits for the
+        // person here and continues once they click Approve or Allow.
+        const result = await waitForPerson(async () => {
+          if (profileBridge?.hasActiveExtension()) {
+            const active = peekActiveWorkspace()?.profile ?? 'default';
+            const profile = profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name;
+            try {
+              await profileBridge.sendCommand('ping_probe', { requireClientApproval: true }, { profile });
+            } catch (err) { return errorResult(err instanceof Error ? err.message : 'Chrome client approval is required.'); }
+          }
+          return dispatchToolCall(d.name, args);
+        }, {
+          signal: extra.signal,
+          progressToken: extra._meta?.progressToken,
+          sendNotification: extra.sendNotification,
+        });
         if (verifiedNow) result.content.unshift({ type: 'text', text: 'Email verified. MCP Browser Extension access is active.' });
         return result;
       }),

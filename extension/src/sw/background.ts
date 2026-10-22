@@ -480,7 +480,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       : chrome.permissions.remove({ permissions: [msg.feature] });
     void operation.then((changed) => reply({ ok: changed || !msg.allow,
       ...(!changed && msg.allow ? { error: 'No access was added. You can allow it whenever you are ready.' } : {}),
-    }), () => reply({ ok: false, error: 'Could not change this permission. Please try again.' }));
+    }), () => reply({ ok: false, error: 'Could not change this permission. Please try again.' }))
+      .finally(() => { if (msg.allow) void reopenPopup(sender); });
     return true;
   }
   if (['access_stop', 'access_resume', 'activity_clear'].includes(msg?.type)) {
@@ -567,7 +568,8 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       ws.send(frame);
       if (currentPolicy) await onAllowlist(currentPolicy);
       reply({ ok: true });
-    })().catch(() => reply({ ok: false, error: 'Could not update this website permission. Please try again.' }));
+    })().catch(() => reply({ ok: false, error: 'Could not update this website permission. Please try again.' }))
+      .finally(() => { if (msg.type === 'site_access' && msg.allow) void reopenPopup(sender); });
     return true;
   }
   // Options page: re-apply after a permission change, and its Check IP button.
@@ -592,6 +594,19 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     return true;
   }
 });
+
+/**
+ * Chrome closes the toolbar popup to show its own Allow/Deny prompt. Bring the
+ * popup back once that decision is made, so the person stays where they were.
+ */
+async function reopenPopup(sender: chrome.runtime.MessageSender): Promise<void> {
+  if (sender.url !== chrome.runtime.getURL('popup.html')) return;
+  try {
+    const open = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.POPUP] });
+    if (open.length) return;
+    await chrome.action.openPopup();
+  } catch { /* Older Chrome or no focused window: the decision still applies. */ }
+}
 
 /**
  * Refetch the pairing from the native helper without a click, once the person

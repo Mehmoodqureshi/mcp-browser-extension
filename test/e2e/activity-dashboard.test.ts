@@ -171,7 +171,7 @@ test('live updates preserve controls and expanded history throughout the popup',
     await popup.locator('#tab-border').uncheck();
     await waitUntil(async () => await h.sw.evaluate(async () => (await chrome.storage.local.get('tabBorder')).tabBorder === false));
     await popup.locator('#activity-all').click();
-    await waitUntil(() => h.ctx.pages().some((page) => page.url().endsWith('/options.html')));
+    await waitUntil(() => h.ctx.pages().some((page) => page.url().endsWith('/options.html#activity-section')));
   } finally { await h.close(); }
 });
 

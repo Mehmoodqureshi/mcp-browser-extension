@@ -50,6 +50,9 @@ test('Allow finishes in the worker when the popup closes during Chrome permissio
           g.finishPermission = () => resolve(granted);
         }));
       };
+      // Record the popup coming back instead of opening a real toolbar popup.
+      g.reopened = 0;
+      g.chrome.action.openPopup = async () => { g.reopened++; };
     });
     await popup.locator('#blocked .row').filter({ hasText: '127.0.0.1' }).getByRole('button', { name: 'Allow', exact: true }).click();
     for (let i = 0; i < 100 && !await h.sw.evaluate(() => typeof (globalThis as any).finishPermission === 'function'); i++) {
@@ -62,6 +65,8 @@ test('Allow finishes in the worker when the popup closes during Chrome permissio
     await options.goto(new URL('options.html', h.sw.url()).href);
     await options.locator('#allowed li').filter({ hasText: '127.0.0.1' }).waitFor();
     assert.ok(h.policy.allowDomains.includes('127.0.0.1'), 'server approval completes without another popup click');
+    for (let i = 0; i < 100 && await h.sw.evaluate(() => (globalThis as any).reopened) === 0; i++) await options.waitForTimeout(20);
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).reopened), 1, 'the popup reopens once Chrome\'s prompt is answered');
     const tab = await h.open('/');
     await h.bridge.sendCommand('tab_close', {}, { tabId: tab });
   } finally { await h.close(); }

@@ -7,9 +7,9 @@
  * three attempts. Retry back-off and the start timeout run on mocked timers.
  */
 
-import { test, type TestContext } from 'node:test';
+import { after, test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,9 +17,23 @@ import { installHint, startQuickTunnel } from '../src/remote/tunnel';
 
 const POSIX = process.platform !== 'win32';
 
+const fakeDirs: string[] = [];
+
+// A failed test must not leave a fake cloudflared running: its open pipes would
+// keep this test file from ever exiting.
+after(() => {
+  for (const dir of fakeDirs) {
+    for (const file of readdirSync(dir)) {
+      const pid = Number(/^args-(\d+)$/.exec(file)?.[1]);
+      if (pid) try { process.kill(pid); } catch { /* already gone */ }
+    }
+  }
+});
+
 /** Write an executable fake cloudflared that runs `body` (Node source). */
 function fakeCloudflared(body: string): { bin: string; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'cmcp-cloudflared-'));
+  fakeDirs.push(dir);
   const bin = join(dir, 'cloudflared');
   writeFileSync(
     bin,
@@ -36,9 +50,11 @@ function fakeCloudflared(body: string): { bin: string; dir: string } {
 const TUNNEL_LINE =
   "INF |  https://brave-otter-sun-heater.trycloudflare.com                    |\n";
 
-/** Resolve after real I/O turns (setImmediate is not mocked here). */
-async function untilTrue(pred: () => boolean, turns = 20_000): Promise<void> {
-  for (let i = 0; i < turns; i++) {
+/** Resolve after real I/O turns (setImmediate and performance are not mocked
+ *  here). Wall-clock bounded: a busy machine can take a while to start Node. */
+async function untilTrue(pred: () => boolean, ms = 15_000): Promise<void> {
+  const deadline = performance.now() + ms;
+  while (performance.now() < deadline) {
     if (pred()) return;
     await new Promise((r) => setImmediate(r));
   }
