@@ -822,6 +822,11 @@ live on the website: **[MCP Browser Extension docs](https://mcp-browser-extensio
 - [Use Claude in your signed-in Chrome](https://mcp-browser-extension.com/logged-in-chrome)
 - [Give Claude Code browser access](https://mcp-browser-extension.com/blog/claude-code-browser)
 - [Give Cursor a real browser with MCP](https://mcp-browser-extension.com/blog/cursor-browser-mcp)
+- [Let VS Code Copilot use your real Chrome](https://mcp-browser-extension.com/blog/vscode-copilot-browser-mcp)
+- [Test a login flow end to end with an AI agent](https://mcp-browser-extension.com/blog/test-login-flow-ai-agent)
+- [Check a release page through a browser MCP tunnel](https://mcp-browser-extension.com/blog/check-release-page-remote-browser)
+- [Chrome DevTools MCP vs Playwright MCP vs an MCP extension](https://mcp-browser-extension.com/blog/chrome-devtools-mcp-vs-playwright-mcp)
+- [Best browser MCP servers in 2026](https://mcp-browser-extension.com/blog/best-browser-mcp-servers)
 - [How it compares with other browser MCP servers](https://mcp-browser-extension.com/docs/compare)
 
 ## Develop
