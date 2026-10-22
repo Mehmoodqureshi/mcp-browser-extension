@@ -20,7 +20,7 @@ inside Chrome's own UI (loading the extension, pasting the pairing token).
   catch-all pattern. Only enable `--unsafe-enable-eval` if the human asks by name.
 - Never print or log the pairing token. It lives in a 0600 file; show the human
   its path, not its contents.
-- Requires Node 18 or newer (`node --version`) and Chrome 116 or newer.
+- Requires Node 20 or newer (`node --version`) and Chrome 116 or newer.
 - On Windows, MCP hosts must launch the server through `cmd /c npx ...`. See
   step 3.
 
