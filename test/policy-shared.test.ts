@@ -90,6 +90,6 @@ test('raw legacy catch-all policies cannot permit reads, actions or observer reg
 
 test('site approval instructions are one friendly line with no blanket-access alternative', () => {
   const message = blockedDomainMessage('example.com');
-  assert.equal(message, 'Please allow access to example.com: Chrome → MCP Browser Extension icon → Allow next to example.com, then try again.');
+  assert.equal(message, 'Please allow access to example.com: in Chrome, click the MCP Browser Extension icon (inside the puzzle-piece Extensions menu if it is not pinned), then click Allow next to example.com.');
   assert.doesNotMatch(message, /[\r\n]|--unsafe|--allow-domain/);
 });

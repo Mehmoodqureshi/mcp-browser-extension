@@ -35,7 +35,7 @@ import {
   truncationMeta,
 } from './limits';
 import { runBatch } from './batch';
-import { waitForPerson } from './person-wait';
+import { personStep, waitForPerson } from './person-wait';
 import { extractLinks, fillForm, readAsMarkdown } from './helpers';
 import { compileRedactionPattern, NO_REDACTION, redactHtml, redactText, type RedactionConfig } from './redact';
 import { resolveLocator, hasLocator, type Locator } from './locate';
@@ -1565,7 +1565,7 @@ function isRetryableFault(name: string, err: unknown): boolean {
   return err instanceof ExecutorError && err.code === 'EXTENSION_DISCONNECTED' && RETRY_SAFE_TOOLS.has(name);
 }
 
-export async function dispatchToolCall(name: string, rawArgs: unknown): Promise<CallToolResult> {
+export async function dispatchToolCall(name: string, rawArgs: unknown, opts: { quietRefusal?: boolean } = {}): Promise<CallToolResult> {
   // The allowlist is checked here, not only at registration, so a `batch` op
   // cannot reach a tool the operator kept off the surface.
   if (!isToolEnabled(name)) return errorResult(`tool not enabled on this server (--tools): ${name}`);
@@ -1576,7 +1576,7 @@ export async function dispatchToolCall(name: string, rawArgs: unknown): Promise<
   // One audit record per call, carried through async hops so a parallel `batch`
   // cannot cross-attribute one op's target URL to another's log line.
   const { result: outcome } = await withAudit(async (audit) =>
-    dispatchInner(name, handler, rawArgs, audit, started),
+    dispatchInner(name, handler, rawArgs, audit, started, opts.quietRefusal === true),
   );
   return outcome;
 }
@@ -1587,7 +1587,14 @@ async function dispatchInner(
   rawArgs: unknown,
   audit: CallAudit,
   started: number,
+  quietRefusal: boolean,
 ): Promise<CallToolResult> {
+  // A person-wait poll that is still refused ran nothing; the first refusal
+  // was already counted, so recording every poll would log ~30 per wait.
+  const record = (result: CallToolResult, extra: { error?: string; ms?: number; audit?: CallAudit }): void => {
+    if (quietRefusal && personStep(result)) return;
+    recordHistory(name, rawArgs, !result.isError, extra);
+  };
   try {
     const mgr = getManager();
     // Workspace-management tools run server-side and must work even with no
@@ -1610,12 +1617,13 @@ async function dispatchInner(
       result = await handler(asArgs(rawArgs), { ex: reconnected, policy: mgr.policy });
       logDebug(`${name}: retry after reconnect succeeded`);
     }
-    recordHistory(name, rawArgs, !result.isError, { ms: Date.now() - started, audit });
+    record(result, { ms: Date.now() - started, audit });
     return result;
   } catch (err) {
     const message = errMessage(err);
-    recordHistory(name, rawArgs, false, { error: message, ms: Date.now() - started, audit });
-    return errorResult(message);
+    const result = errorResult(message);
+    record(result, { error: message, ms: Date.now() - started, audit });
+    return result;
   }
 }
 
@@ -1685,7 +1693,7 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
         if (accessError) return accessError;
         // Approval and site refusals run nothing, so the call waits for the
         // person here and continues once they click Approve or Allow.
-        const result = await waitForPerson(async () => {
+        const result = await waitForPerson(async (retry) => {
           if (profileBridge?.hasActiveExtension()) {
             const active = peekActiveWorkspace()?.profile ?? 'default';
             const profile = profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name;
@@ -1693,7 +1701,7 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
               await profileBridge.sendCommand('ping_probe', { requireClientApproval: true }, { profile });
             } catch (err) { return errorResult(err instanceof Error ? err.message : 'Chrome client approval is required.'); }
           }
-          return dispatchToolCall(d.name, args);
+          return dispatchToolCall(d.name, args, { quietRefusal: retry });
         }, {
           signal: extra.signal,
           progressToken: extra._meta?.progressToken,

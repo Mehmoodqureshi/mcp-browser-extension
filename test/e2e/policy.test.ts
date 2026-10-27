@@ -176,7 +176,7 @@ describe('deny-all domains (allowDomains: [])', () => {
     const r = await h.call('navigate', { url: `${x.allowed}/secret` });
     assertDenied(r, /Please allow access to/i);
     assert.match(textOf(r), /127\.0\.0\.1/, 'names the refused host');
-    assert.match(textOf(r), /MCP Browser Extension icon → Allow next to/, 'shows the one-line approval steps');
+    assert.match(textOf(r), /MCP Browser Extension icon .* then click Allow next to/, 'shows the one-line approval steps');
     assert.doesNotMatch(textOf(r), /--unsafe-all-domains|[\r\n]/);
     await sleep(300);
     assert.deepEqual(requests(x, before), [], 'no request reached the page server');

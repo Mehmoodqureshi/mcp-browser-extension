@@ -15,13 +15,24 @@ export interface PersonWaitRequest {
   sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; message: string } }) => Promise<void>;
 }
 
-let pollMs = 1_500;
+// A fallback only: an approval or site grant wakes the wait at once (below).
+let pollMs = 10_000;
 // Stay under the 60 s default tool timeout some MCP clients enforce.
 let waitMs = 45_000;
 
 export function setPersonWaitForTesting(poll: number, wait: number): void {
   pollMs = Math.max(1, poll);
   waitMs = Math.max(1, wait);
+}
+
+const wakers = new Set<() => void>();
+
+/**
+ * The person just approved an app or allowed a site: retry every waiting call
+ * now instead of on the next fallback poll.
+ */
+export function notifyPersonStep(): void {
+  for (const wake of [...wakers]) wake();
 }
 
 const APPROVAL = /Please approve "/;
@@ -42,10 +53,11 @@ export const STILL_WAITING =
 /**
  * Run `attempt` until it is no longer blocked on the person, the wait expires,
  * or the call is cancelled. Only results that ran nothing (approval / site
- * gate refusals) are retried.
+ * gate refusals) are retried. `retry` is true on every attempt after the
+ * first, so the caller can count one refusal per wait instead of one per poll.
  */
-export async function waitForPerson(attempt: () => Promise<CallToolResult>, request: PersonWaitRequest): Promise<CallToolResult> {
-  let result = await attempt();
+export async function waitForPerson(attempt: (retry: boolean) => Promise<CallToolResult>, request: PersonWaitRequest): Promise<CallToolResult> {
+  let result = await attempt(false);
   let step = personStep(result);
   if (!step) return result;
   const deadline = Date.now() + waitMs;
@@ -60,11 +72,12 @@ export async function waitForPerson(attempt: () => Promise<CallToolResult>, requ
   while (Date.now() < deadline && !request.signal?.aborted) {
     await new Promise<void>((resolve) => {
       const timer = setTimeout(done, Math.min(pollMs, Math.max(1, deadline - Date.now())));
-      function done(): void { clearTimeout(timer); request.signal?.removeEventListener('abort', done); resolve(); }
+      function done(): void { clearTimeout(timer); wakers.delete(done); request.signal?.removeEventListener('abort', done); resolve(); }
+      wakers.add(done);
       request.signal?.addEventListener('abort', done, { once: true });
     });
     if (request.signal?.aborted) break;
-    result = await attempt();
+    result = await attempt(true);
     const next = personStep(result);
     if (!next) return result;
     // Approving the app can uncover the site gate; say what is awaited now.

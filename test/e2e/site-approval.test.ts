@@ -59,6 +59,8 @@ test('Allow finishes in the worker when the popup closes during Chrome permissio
       await popup.waitForTimeout(20);
     }
     assert.equal(await h.sw.evaluate(() => typeof (globalThis as any).finishPermission), 'function');
+    // Only count the reopen after Chrome's prompt, not the popup the block itself opened.
+    await h.sw.evaluate(() => { (globalThis as any).reopened = 0; });
     await popup.close();
     await h.sw.evaluate(() => (globalThis as any).finishPermission());
     const options = await h.ctx.newPage();
@@ -130,7 +132,7 @@ test('a website stays blocked until a human click and is blocked again after rem
     await options.goto(new URL('options.html', h.sw.url()).href);
     const blocked = await h.call('tab_new', { url: h.base });
     assert.equal(blocked.isError, true);
-    assert.match(textOf(blocked), /Please allow access to 127\.0\.0\.1: Chrome → MCP Browser Extension icon → Allow next to/);
+    assert.match(textOf(blocked), /Please allow access to 127\.0\.0\.1: in Chrome, click the MCP Browser Extension icon .* then click Allow next to/);
     assert.doesNotMatch(textOf(blocked), /[\r\n]/);
     assert.deepEqual(h.policy.allowDomains, []);
 
@@ -220,5 +222,45 @@ test('an older server catch-all is ignored and extension-side blocks appear in t
     await allowed.waitFor({ state: 'hidden' });
     await assert.rejects(h.bridge.sendCommand('get_text', {}, { tabId: tab.tabId }), /Please allow access to 127\.0\.0\.1/);
     await request.getByRole('button', { name: 'Allow', exact: true }).waitFor();
+  } finally { await h.close(); }
+});
+
+test('a newly blocked website opens the popup once, not on every retry', { skip: !RUN_E2E }, async () => {
+  const h = await startHarness({}, { browserPermissions: false });
+  try {
+    await h.sw.evaluate(() => {
+      const g = globalThis as any;
+      g.opened = 0;
+      g.chrome.action.openPopup = async () => { g.opened++; };
+    });
+    const url = h.base.replace('127.0.0.1', 'localhost');
+    for (let i = 0; i < 3; i++) await assert.rejects(h.bridge.sendCommand('tab_new', { url }), /Please allow access to localhost/);
+    for (let i = 0; i < 100 && await h.sw.evaluate(() => (globalThis as any).opened) === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).opened), 1, 'one popup for the new site, none for the retries');
+  } finally { await h.close(); }
+});
+
+test('a block while the person is in another app shows the popup when they return to Chrome', { skip: !RUN_E2E }, async () => {
+  const h = await startHarness({}, { browserPermissions: false });
+  try {
+    await h.sw.evaluate(() => {
+      const g = globalThis as any;
+      g.opened = 0;
+      g.chrome.action.openPopup = async () => { g.opened++; };
+      // The person is in the terminal: no Chrome window has focus.
+      g.realLastFocused = g.chrome.windows.getLastFocused.bind(g.chrome.windows);
+      g.chrome.windows.getLastFocused = async () => ({ ...(await g.realLastFocused()), focused: false });
+    });
+    const url = h.base.replace('127.0.0.1', 'localhost');
+    await assert.rejects(h.bridge.sendCommand('tab_new', { url }), /Please allow access to localhost/);
+    for (let i = 0; i < 100 && !(await h.sw.evaluate(async () => (await (globalThis as any).chrome.storage.session.get('popupOwed')).popupOwed)); i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).opened), 0, 'nothing pops up while Chrome is in the background');
+    // The person switches back to Chrome.
+    await h.sw.evaluate(() => (globalThis as any).chrome.windows.create({ focused: true }));
+    for (let i = 0; i < 100 && await h.sw.evaluate(() => (globalThis as any).opened) === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).opened), 1, 'the popup opens on return');
   } finally { await h.close(); }
 });

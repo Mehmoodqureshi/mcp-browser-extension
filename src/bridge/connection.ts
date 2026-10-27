@@ -84,6 +84,7 @@ export interface ConnectionDeps {
   onEvent?: (event: WireEvent, data: Record<string, unknown>) => void;
   /** The person allowed or removed a site on this browser's Options page. */
   onSiteGrant?: (host: unknown, allow: boolean) => void;
+  onApprovalChanged?: () => void;
   onClose?: (code: number) => void;
   onLog?: (message: string) => void;
 }
@@ -110,6 +111,7 @@ export class ExtensionConnection {
   private readonly tabUrls = new Map<string, { url: string; at: number }>();
   private readonly onEvent?: ConnectionDeps['onEvent'];
   private readonly onSiteGrant?: ConnectionDeps['onSiteGrant'];
+  private readonly onApprovalChanged?: ConnectionDeps['onApprovalChanged'];
   private readonly onClose?: ConnectionDeps['onClose'];
   private readonly onLog?: ConnectionDeps['onLog'];
 
@@ -122,6 +124,7 @@ export class ExtensionConnection {
     this.reportsTabUrl = this.caps.has(WIRE_CAP_TAB_URL);
     this.onEvent = deps.onEvent;
     this.onSiteGrant = deps.onSiteGrant;
+    this.onApprovalChanged = deps.onApprovalChanged;
     this.onClose = deps.onClose;
     this.onLog = deps.onLog;
 
@@ -235,6 +238,9 @@ export class ExtensionConnection {
         this.onSiteGrant?.(g.host, g.allow === true);
         break;
       }
+      case 'approval_changed':
+        this.onApprovalChanged?.();
+        break;
       default:
         // hello arrives only pre-auth (handled by the server); ignore here.
         break;

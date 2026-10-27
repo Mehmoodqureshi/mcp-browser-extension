@@ -43,6 +43,16 @@ interface PairConfig {
 
 let pendingClients = 0;
 let pendingFeatures = 0;
+// What was already waiting when this worker woke, so a restart (Chrome stops
+// idle workers) does not pop the popup again for an old request.
+const seenPendingClients: { ids?: Set<string> } = {};
+const seenMissingFeatures: { ids?: Set<string> } = {};
+function newlyPending(seen: { ids?: Set<string> }, now: string[]): boolean {
+  const first = !seen.ids;
+  const added = now.some((id) => !seen.ids?.has(id));
+  seen.ids = new Set(now);
+  return !first && added;
+}
 const KEEPALIVE_ALARM = 'chrome-mcp-keepalive';
 
 /** A site the server refused, kept so the Options page can offer an Allow. */
@@ -132,8 +142,13 @@ const approvals = new ClientApprovals({
   write: async (clients) => { await chrome.storage.local.set({ [CLIENT_STORAGE_KEY]: clients }); },
   challenge: () => ws.approvalChallenge,
   changed: (clients) => {
-    pendingClients = clients.filter((c) => c.state === 'pending' && c.expiresAt > Date.now()).length;
+    const pending = clients.filter((c) => c.state === 'pending' && c.expiresAt > Date.now());
+    pendingClients = pending.length;
     reflectBadge(ws.state);
+    // A new app is waiting: show the popup with its Approve button.
+    if (newlyPending(seenPendingClients, pending.map((c) => c.id))) void showPopup();
+    // Tell the server at once, so a call waiting for this approval retries now.
+    if (ws.isConnected()) ws.send({ type: 'approval_changed', v: PROTOCOL_VERSION });
   },
 });
 const activity = new ActivityLog({
@@ -285,17 +300,50 @@ async function onAllowlist(policy: WirePolicy): Promise<void> {
   reflectBadge(ws.state);
 }
 
-/** The server refused `host`: list it on the Options page and flag the toolbar icon. */
+/** The server refused `host`: list it on the Options page, flag the toolbar icon and show the popup. */
 async function rememberBlocked(host: string, method: string): Promise<void> {
   const { blockedSites, dismissedSites } = await chrome.storage.local.get(['blockedSites', 'dismissedSites']);
-  const prior = (Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : []).filter((b) => b.host !== host);
+  const listed = Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : [];
+  const prior = listed.filter((b) => b.host !== host);
   const next = [{ host, method, at: Date.now() }, ...prior].slice(0, MAX_BLOCKED);
   await chrome.storage.local.set({ blockedSites: next,
     dismissedSites: (Array.isArray(dismissedSites) ? dismissedSites : []).filter((site) => site !== host),
   });
   pendingBlocked = next.length;
   reflectBadge(ws.state);
+  // A new install sits in the puzzle-piece menu where the badge is hidden, so
+  // open the popup with its Allow button. Only for a newly listed site: the
+  // server re-asks every poll while it waits, and that must not pop it again.
+  if (prior.length === listed.length) void showPopup();
 }
+
+const POPUP_OWED_KEY = 'popupOwed';
+
+async function showPopup(): Promise<void> {
+  try {
+    const open = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.POPUP] });
+    if (open.length) return;
+    // Chrome shows the popup only in the window the person is using. While they
+    // are in another app (often the terminal running the agent), show it the
+    // moment they switch back to Chrome instead.
+    if (!(await chrome.windows.getLastFocused()).focused) {
+      await chrome.storage.session.set({ [POPUP_OWED_KEY]: true });
+      return;
+    }
+    await chrome.action.openPopup();
+  } catch { /* Older Chrome: the badge still flags it. */ }
+}
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  void (async () => {
+    if (!(await chrome.storage.session.get(POPUP_OWED_KEY))[POPUP_OWED_KEY]) return;
+    await chrome.storage.session.remove(POPUP_OWED_KEY);
+    // The badge outlives a worker restart: '?' means something still waits on the person.
+    if (await chrome.action.getBadgeText({}) !== '?') return;
+    await chrome.action.openPopup({ windowId });
+  })().catch(() => undefined);
+});
 
 /** Refused sites not yet allowed or dismissed; non-zero flags the toolbar icon. */
 let pendingBlocked = 0;
@@ -423,8 +471,10 @@ async function refreshFeatureBadge(): Promise<void> {
   const missing = await Promise.all(requested.map(async (permission) =>
     !await chrome.permissions.contains({ permissions: [permission] })));
   if (generation !== featureBadgeGeneration) return;
-  pendingFeatures = missing.filter(Boolean).length;
+  const stillMissing = requested.filter((_, i) => missing[i]);
+  pendingFeatures = stillMissing.length;
   reflectBadge(ws.state);
+  if (newlyPending(seenMissingFeatures, stillMissing)) void showPopup();
 }
 chrome.permissions.onAdded.addListener((permissions) => {
   void (async () => {
@@ -601,11 +651,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
  */
 async function reopenPopup(sender: chrome.runtime.MessageSender): Promise<void> {
   if (sender.url !== chrome.runtime.getURL('popup.html')) return;
-  try {
-    const open = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.POPUP] });
-    if (open.length) return;
-    await chrome.action.openPopup();
-  } catch { /* Older Chrome or no focused window: the decision still applies. */ }
+  await showPopup();
 }
 
 /**

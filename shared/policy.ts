@@ -201,7 +201,9 @@ export function evaluatePolicy(url: string, method: WireMethod, policy: WirePoli
  * wait; only the person can approve the site in Chrome.
  */
 export function blockedDomainMessage(host: string): string {
-  return `Please allow access to ${host}: Chrome → MCP Browser Extension icon → Allow next to ${host}, then try again.`;
+  // New installs sit inside Chrome's puzzle-piece menu, where the "?" badge is
+  // hidden, so the steps say where to find the icon.
+  return `Please allow access to ${host}: in Chrome, click the MCP Browser Extension icon (inside the puzzle-piece Extensions menu if it is not pinned), then click Allow next to ${host}.`;
 }
 
 /** A wire policy that allows nothing — the safe default when none was delivered. */

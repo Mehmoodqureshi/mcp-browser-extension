@@ -44,6 +44,7 @@ import { ProfileRegistry, isValidInstallId } from './profiles';
 import { HubLink, relayError, type HubToPeerFrame, type PeerHelloFrame, type PeerToHubFrame } from './peer';
 import { SiteGrants } from './site-grants';
 import { handshakePath } from './datadir';
+import { notifyPersonStep } from '../mcp/person-wait';
 
 /** Where a person gets the extension. */
 export const WEB_STORE_URL = STORE_EXTENSION_URL;
@@ -254,12 +255,20 @@ export class BridgeServer {
     const frame = { type: 'policy' as const, v: PROTOCOL_VERSION, policy: this.policy, granted: this.grants.list() };
     for (const conn of this.conns.values()) conn.push(frame);
     for (const peer of this.peers) this.sendPeer(peer, { type: 'peer_grant', host: site, allow });
+    notifyPersonStep();
+  }
+
+  /** The person approved or revoked an app in a browser: wake waiting calls here and on peers. */
+  private approvalChanged(): void {
+    for (const peer of this.peers) this.sendPeer(peer, { type: 'peer_wake' });
+    notifyPersonStep();
   }
 
   /** Peer side: the hub reports a grant made in a browser; mirror it in our own gate. */
   private mirrorSiteGrant(host: string, allow: boolean): void {
     // The hub already saved it (to its data dir, normally the same one).
     if (this.grants?.apply(host, allow, false)) this.log(`${allow ? 'allowed' : 'removed'} site "${host}" (shared by the hub)`);
+    notifyPersonStep();
   }
 
   /** 'hub' or 'peer' once started; null before start and between roles. */
@@ -869,6 +878,7 @@ export class BridgeServer {
       approvalChallenge: origin.approvalChallenge,
       onEvent: this.opts.onEvent,
       onSiteGrant: (host, allow) => this.applySiteGrant(host, allow),
+      onApprovalChanged: () => this.approvalChanged(),
       onLog: (m) => this.log(m),
       onClose: () => {
         // Only clear if a newer re-pair hasn't already replaced this slot. Look it

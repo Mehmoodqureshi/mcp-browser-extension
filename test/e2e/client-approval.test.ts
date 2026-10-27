@@ -196,3 +196,20 @@ test('MCP sessions still need Chrome approval when email verification is bypasse
     await h.close();
   }
 });
+
+test('a new app waiting for approval opens the popup once, not on every retry', { skip }, async () => {
+  const h = await startHarness({}, { approveClient: false });
+  const app = createClientIdentity(() => 'Popup app');
+  const read = () => withClientIdentity(app, () => h.bridge.sendCommand('tabs_list', {}));
+  try {
+    await h.sw.evaluate(() => {
+      const g = globalThis as any;
+      g.opened = 0;
+      g.chrome.action.openPopup = async () => { g.opened++; };
+    });
+    for (let i = 0; i < 3; i++) await assert.rejects(read(), /Please approve/);
+    for (let i = 0; i < 100 && await h.sw.evaluate(() => (globalThis as any).opened) === 0; i++) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).opened), 1, 'one popup for the new app, none for its retries');
+  } finally { await h.close(); }
+});

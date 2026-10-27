@@ -15,7 +15,7 @@ import type { ClientProof } from '../../shared/client-auth';
  * file is 0600, so only the same OS user can read it — and speak a small
  * server-to-server protocol that the extension never sees:
  *   peer → hub:  peer_hello, relay (a wire command), peer_rename, peer_blocked
- *   hub → peer:  peer_welcome, peer_state (paired browsers), relay_result, peer_grant
+ *   hub → peer:  peer_welcome, peer_state (paired browsers), relay_result, peer_grant, peer_wake
  */
 
 import { WebSocket } from 'ws';
@@ -23,6 +23,7 @@ import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION, type WireMethod } from '../../shared/protocol';
 import { ExecutorError, type ExecutorErrorCodeLocal } from '../executor/types';
 import type { PairedProfile } from './server';
+import { notifyPersonStep } from '../mcp/person-wait';
 
 /** How long a joining server waits for the hub's welcome before giving up. */
 export const JOIN_TIMEOUT_MS = 2_000;
@@ -82,7 +83,11 @@ export interface PeerGrantFrame {
   host: string;
   allow: boolean;
 }
-export type HubToPeerFrame = PeerWelcomeFrame | PeerStateFrame | RelayResultFrame | PeerGrantFrame;
+/** An app was approved in a browser: peers retry calls waiting on the person. */
+export interface PeerWakeFrame {
+  type: 'peer_wake';
+}
+export type HubToPeerFrame = PeerWelcomeFrame | PeerStateFrame | RelayResultFrame | PeerGrantFrame | PeerWakeFrame;
 
 /** Encode a hub-side failure so the peer can rethrow it with its code intact. */
 export function relayError(id: string, err: unknown): RelayResultFrame {
@@ -246,6 +251,10 @@ export class HubLink {
     }
     if (frame.type === 'peer_grant') {
       if (typeof frame.host === 'string') this.onGrant?.(frame.host, frame.allow === true);
+      return;
+    }
+    if (frame.type === 'peer_wake') {
+      notifyPersonStep();
       return;
     }
     if (frame.type !== 'relay_result') return;

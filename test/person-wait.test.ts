@@ -7,12 +7,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
-import { personStep, setPersonWaitForTesting, STILL_WAITING, waitForPerson } from '../src/mcp/person-wait';
+import { notifyPersonStep, personStep, setPersonWaitForTesting, STILL_WAITING, waitForPerson } from '../src/mcp/person-wait';
 
 const err = (text: string): CallToolResult => ({ content: [{ type: 'text', text }], isError: true });
 const ok: CallToolResult = { content: [{ type: 'text', text: 'done' }] };
 const APPROVE = 'Please approve "codex 1.0" (check key ab12): Chrome → MCP Browser Extension icon → App connections → Approve for 8 hours.';
-const SITE = '[POLICY_DENIED] Please allow access to example.com: Chrome → MCP Browser Extension icon → Allow next to example.com, then try again.';
+const SITE = '[POLICY_DENIED] Please allow access to example.com: in Chrome, click the MCP Browser Extension icon (inside the puzzle-piece Extensions menu if it is not pinned), then click Allow next to example.com.';
 
 test('only approval and site refusals count as waiting on the person', () => {
   assert.equal(personStep(err(APPROVE)), APPROVE);
@@ -57,4 +57,23 @@ test('stops waiting when the call is cancelled', async () => {
   const result = await waitForPerson(async () => err(APPROVE), { signal: ac.signal });
   assert.equal(result.isError, true);
   assert.ok(Date.now() - started < 1_000);
+});
+
+test('tells the caller which attempts are retries', async () => {
+  setPersonWaitForTesting(1, 1_000);
+  const retries: boolean[] = [];
+  await waitForPerson(async (retry) => { retries.push(retry); return retries.length < 3 ? err(SITE) : ok; }, {});
+  assert.deepEqual(retries, [false, true, true]);
+});
+
+test('retries once as soon as the person acts, not on the next poll', async () => {
+  setPersonWaitForTesting(60_000, 120_000);
+  let allowed = false;
+  let calls = 0;
+  const started = Date.now();
+  setTimeout(() => { allowed = true; notifyPersonStep(); }, 30);
+  const result = await waitForPerson(async () => { calls++; return allowed ? ok : err(SITE); }, {});
+  assert.deepEqual(result, ok);
+  assert.equal(calls, 2, 'one refusal, then one retry after the signal');
+  assert.ok(Date.now() - started < 5_000, 'did not sit out the 60 s fallback poll');
 });

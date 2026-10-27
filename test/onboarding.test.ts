@@ -8,6 +8,7 @@
  */
 
 import { test } from 'node:test';
+import { setPersonWaitForTesting, waitForPerson } from '../src/mcp/person-wait';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -139,6 +140,29 @@ test('an Allow from the extension widens the live policy and reaches every brows
     a.send({ type: 'site_grant', host: '*', allow: true });
     await delay(50);
     assert.deepEqual(live.allowDomains, ['news.ycombinator.com']);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('an Allow or an app approval wakes calls waiting on the person', async () => {
+  setPersonWaitForTesting(60_000, 120_000);
+  const bridge = new BridgeServer({ token: TOKEN, serverVersion: 't', port: 0, heartbeatMs: 0, policy: policy([]), dataDir: tmp() });
+  const port = await bridge.start();
+  try {
+    const ext = await Ext.open(port);
+    for (const frame of [{ type: 'site_grant', host: 'example.com', allow: true }, { type: 'approval_changed' }]) {
+      let calls = 0;
+      const waiting = waitForPerson(async () => (++calls === 1
+        ? { content: [{ type: 'text', text: '[POLICY_DENIED] Please allow access to example.com: click Allow next to example.com.' }], isError: true }
+        : { content: [{ type: 'text', text: 'done' }] }), {});
+      await delay(20);
+      ext.send(frame);
+      const started = Date.now();
+      assert.equal(((await waiting).content[0] as { text: string }).text, 'done');
+      assert.ok(Date.now() - started < 5_000, `${frame.type} woke the wait`);
+      assert.equal(calls, 2);
+    }
   } finally {
     await bridge.stop();
   }

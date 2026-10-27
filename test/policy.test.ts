@@ -26,6 +26,7 @@ import { ExecutorError } from '../src/executor/types';
 import { PROTOCOL_VERSION, DEFAULT_WS_PORT, WIRE_METHODS } from '../shared/protocol';
 import { parseArgs } from '../src/config';
 import { dispatchToolCall, resetRateLimiter } from '../src/mcp/tools';
+import { initTelemetry, stopTelemetry } from '../src/telemetry';
 import { configureManager, resetManagerForTesting } from '../src/executor/manager';
 import { StubExecutor, type StubOptions } from '../src/executor/stub-executor';
 
@@ -412,4 +413,36 @@ test('tab_select works in the background unless show:true asks to bring it forwa
   const missing = await dispatchToolCall('tab_select', { tabId: 'extension:stub:99' });
   assert.equal(missing.isError, true);
   assert.match(textOf(missing), /tabs_list/);
+});
+
+// --- a person-wait poll is counted once, not once per poll -------------------
+
+test('a site refusal retried while waiting for the person is counted once', async () => {
+  const sent: { event: string; properties: Record<string, unknown> }[] = [];
+  initTelemetry({
+    dataDir: mkdtempSync(join(tmpdir(), 'cmcp-tel-')),
+    version: '9.9.9',
+    env: {},
+    key: 'phc_test',
+    log: () => undefined,
+    send: async (batch) => void sent.push(...(batch as typeof sent)),
+  });
+  try {
+    configure({ activeUrl: 'https://blocked.test/page' });
+    const first = await dispatchToolCall('get_text', {});
+    assert.match(textOf(first), /^\[POLICY_DENIED\] Please allow access to blocked\.test/);
+    for (let i = 0; i < 5; i++) {
+      const poll = await dispatchToolCall('get_text', {}, { quietRefusal: true });
+      assert.match(textOf(poll), /^\[POLICY_DENIED\] Please allow access to/);
+    }
+    // Once allowed, the call that runs is still recorded.
+    configure({ activeUrl: 'https://example.com/page' });
+    assert.notEqual((await dispatchToolCall('get_text', {}, { quietRefusal: true })).isError, true);
+  } finally {
+    await stopTelemetry();
+  }
+  const summary = sent.find((e) => e.event === 'usage_summary')!.properties;
+  assert.equal(summary.calls, 2);
+  assert.equal(summary.errors, 1);
+  assert.deepEqual(summary.error_codes, { POLICY_DENIED: 1 });
 });

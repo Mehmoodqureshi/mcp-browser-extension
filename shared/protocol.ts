@@ -402,13 +402,18 @@ export interface SiteGrantFrame extends BaseFrame {
   allow: boolean;
 }
 
+/** Extension → server: the person approved or revoked an app, so waiting calls can retry. */
+export interface ApprovalChangedFrame extends BaseFrame {
+  type: 'approval_changed';
+}
+
 // ---- unions ----
 
 /** Frames the SERVER sends to the extension. */
 export type ServerFrame = CommandFrame | WelcomeFrame | UnauthFrame | PingFrame | PolicyFrame | BlockedFrame;
 
 /** Frames the EXTENSION sends to the server. */
-export type ExtensionFrame = HelloFrame | ResultFrame | ErrorFrame | EventFrame | PongFrame | SiteGrantFrame;
+export type ExtensionFrame = HelloFrame | ResultFrame | ErrorFrame | EventFrame | PongFrame | SiteGrantFrame | ApprovalChangedFrame;
 
 export type Frame = ServerFrame | ExtensionFrame;
 
