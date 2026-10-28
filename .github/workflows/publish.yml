@@ -53,6 +53,14 @@ jobs:
       - name: Test
         run: npm test
 
+      # A release ships only if the real extension still works in a browser.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser E2E
+        timeout-minutes: 30
+        run: npm run test:e2e
+
       - name: Publish to npm
         run: |
           if npm view "${{ steps.meta.outputs.name }}@${{ steps.meta.outputs.version }}" version >/dev/null 2>&1; then

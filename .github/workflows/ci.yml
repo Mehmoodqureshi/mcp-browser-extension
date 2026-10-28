@@ -12,14 +12,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
+        # Windows guards against POSIX-only assumptions (the 0600 mode check in
+        # bridge/auth.ts, `ps`, .cmd bin shims) regressing for native-Windows
+        # users, on the same oldest and newest Node as Linux.
+        os: [ubuntu-latest, windows-latest]
         node-version: [20, 24]
-        # One Windows job guards against POSIX-only assumptions (the 0600 mode
-        # check in bridge/auth.ts, `ps`, .cmd bin shims) regressing for
-        # native-Windows users.
-        include:
-          - os: windows-latest
-            node-version: 22
     name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
     steps:
       - uses: actions/checkout@v4
@@ -48,3 +45,26 @@ jobs:
         # The extension smoke test self-skips unless RUN_EXT_SMOKE is set (it
         # needs a headed Chrome), so the default suite runs browser-free in CI.
         run: npm test
+
+  e2e:
+    # The real extension in Playwright's headless Chromium, against fixture
+    # pages served by the test itself: no secrets, no network, no real profile.
+    runs-on: ubuntu-latest
+    name: Browser E2E / Node 24
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser E2E
+        run: npm run test:e2e
