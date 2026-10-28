@@ -1,5 +1,6 @@
 import { CLIENT_APPROVAL_CAP, isHealthProbe, type ClientProof } from '../../shared/client-auth';
 import { createClientIdentity, currentClientIdentity } from './client-identity';
+import { chromeProfileKeys, chromeProfileName, profileKeyFromChromeName } from './chrome-profile-name';
 /**
  * src/bridge/server.ts — the localhost WebSocket bridge.
  *
@@ -39,7 +40,7 @@ import { ExecutorError } from '../executor/types';
 import { ExtensionConnection, defaultTimeoutFor } from './connection';
 import { readHandshake, tokensMatch } from './auth';
 import { evictPortOwner } from './evict';
-import { sanitizeName } from '../config';
+import { resolveProfile, sanitizeName } from '../config';
 import { ProfileRegistry, isValidInstallId } from './profiles';
 import { HubLink, relayError, type HubToPeerFrame, type PeerHelloFrame, type PeerToHubFrame } from './peer';
 import { SiteGrants } from './site-grants';
@@ -113,6 +114,9 @@ function routeKey(profile: string | undefined): string {
   }
 }
 
+/** Hub → peer: the proof was signed for an older connection of this browser. */
+export const STALE_RELAY_MESSAGE = 'The browser reconnected while this command was being sent. Retry it.';
+
 const HELLO_TIMEOUT_MS = 5_000;
 const DEFAULT_HEARTBEAT_MS = 15_000;
 /** Max pre-auth frames a socket may send before a valid hello (anti-idle-hold). */
@@ -165,6 +169,13 @@ export interface BridgeOptions {
   siteGrants?: boolean;
   /** The extension version bundled with this server: what an up-to-date copy reports. */
   latestExtensionVersion?: string;
+  /** Reads Chrome's profiles on this computer for naming; null turns it off (tests). */
+  chromeProfiles?: {
+    nameOf(extId: unknown, installId: string): string | undefined;
+    keys(): string[];
+  } | null;
+  /** The name the pairing helper hands every browser (this server's --profile). */
+  helperProfile?: string;
   port?: number;
   host?: string;
   heartbeatMs?: number;
@@ -489,11 +500,28 @@ export class BridgeServer {
     let authorization: ClientProof | undefined;
     if (!isHealthProbe(intent)) {
       if (!this.hasConnection(profile)) throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
-      if (!challenge) throw new ExecutorError('POLICY_DENIED', 'Update the extension and MCP server together: this browser cannot enforce client approval yet.');
+      if (!challenge) {
+        throw new ExecutorError('POLICY_DENIED',
+          `The browser paired as "${profile}" is running extension code too old to check app approvals. ` +
+          'Chrome can keep running old code even after the files update: open chrome://extensions in that Chrome profile ' +
+          'and click Reload on MCP Browser Extension (or update it from the Chrome Web Store), then retry.');
+      }
       authorization = (currentClientIdentity() ?? this.clientIdentity).sign(intent, challenge);
     }
     const options = { ...opts, timeoutMs, authorization };
-    if (this.hub) return this.hub.relay(method, params, options);
+    if (this.hub) {
+      try {
+        return await this.hub.relay(method, params, options);
+      } catch (err) {
+        // The browser reconnected between our signature and the hub's send. The
+        // hub pushed its new challenge before refusing, so re-sign once.
+        if (!(err instanceof ExecutorError) || err.message !== STALE_RELAY_MESSAGE || !authorization) throw err;
+        const fresh = this.hub?.profiles.find((p) => p.name === profile)?.approvalChallenge;
+        if (!this.hub || !fresh || fresh === challenge) throw err;
+        const resigned = (currentClientIdentity() ?? this.clientIdentity).sign(intent, fresh);
+        return this.hub.relay(method, params, { ...options, authorization: resigned });
+      }
+    }
     return this.forwardCommand(method, params, options);
   }
 
@@ -507,6 +535,12 @@ export class BridgeServer {
     if (!conn?.isOpen()) throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
     if (!isHealthProbe({ method, params }) && (!conn.hasCap(CLIENT_APPROVAL_CAP) || !opts?.authorization)) {
       throw new ExecutorError('POLICY_DENIED', 'Signed client authorization and an updated extension are required.');
+    }
+    // A peer signs with the challenge it last heard about. If this browser has
+    // reconnected since, Chrome would refuse the proof as stale: say so instead,
+    // so the peer re-signs (it already has the new challenge from broadcastState).
+    if (opts?.authorization && conn.approvalChallenge && opts.authorization.challenge !== conn.approvalChallenge) {
+      throw new ExecutorError('EXTENSION_DISCONNECTED', STALE_RELAY_MESSAGE);
     }
     return conn.sendCommand(method, params, opts);
   }
@@ -774,13 +808,34 @@ export class BridgeServer {
    */
   private nameFor(frame: Partial<HelloFrame>): { profile: string; naming: ProfileNaming; installId?: string } {
     const installId = isValidInstallId(frame.installId) ? frame.installId : undefined;
-    if (frame.profile && frame.profile.trim()) return { profile: routeKey(frame.profile), naming: 'options', installId };
+    const helperProfile = this.opts.helperProfile ?? resolveProfile();
+    let suggested: string | undefined;
+    if (typeof frame.suggestedProfile === 'string' && frame.suggestedProfile.trim()) {
+      try { suggested = sanitizeName(frame.suggestedProfile, 'profile'); } catch { /* ignore an unusable hint */ }
+    }
+    if (frame.profile && frame.profile.trim()) {
+      const label = routeKey(frame.profile);
+      // Extensions before 0.9.35 saved the helper's name as if it was typed, so
+      // every browser paired with Connect claimed it and knocked the others off.
+      // That exact name is a suggestion; any other label is the person's choice.
+      if (!installId || helperProfile === DEFAULT_PROFILE || label !== helperProfile) {
+        return { profile: label, naming: 'options', installId };
+      }
+      suggested = label;
+    }
     if (!installId) return { profile: DEFAULT_PROFILE, naming: 'legacy' };
     const heldByOther = (name: string): boolean => {
       const conn = this.conns.get(name);
       return !!conn && conn.isOpen() && this.origins.get(name)?.installId !== installId;
     };
-    return { profile: this.registry.assign(installId, heldByOther), naming: 'auto', installId };
+    // Chrome won't tell an extension its profile, but we can look it up on disk.
+    const chrome = this.opts.chromeProfiles === null ? null
+      : this.opts.chromeProfiles ?? { nameOf: chromeProfileName, keys: () => chromeProfileKeys() };
+    const own = chrome?.nameOf(frame.ext?.id, installId);
+    const ownKey = own ? profileKeyFromChromeName(own) : undefined;
+    // Never hand a browser the name of a different Chrome profile on this computer.
+    if (suggested && suggested !== ownKey && chrome?.keys().includes(suggested)) suggested = undefined;
+    return { profile: this.registry.assign(installId, heldByOther, [suggested], ownKey), naming: 'auto', installId };
   }
 
   /** Hub side: serve a joined peer's relayed commands against our browsers. */

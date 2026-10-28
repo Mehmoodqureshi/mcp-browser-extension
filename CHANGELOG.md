@@ -1,3 +1,40 @@
+## 0.9.35 - 2026-10-28
+
+Several Chrome profiles now stay connected side by side, and the extension
+keeps itself on the newest version.
+
+- fix: Connect no longer gives every Chrome profile the server's profile name.
+  The name is now only a suggestion, used when no other browser has it, so
+  connecting a third profile no longer disconnects another one. Profiles
+  already connected this way switch over by themselves. A name typed in
+  Settings still always wins.
+- feat: a browser with no typed name is named after its Chrome profile (the
+  name on Chrome's profile icon, e.g. "mehmood701") instead of "profile-25".
+  The server finds the profile on disk, so it works with any extension
+  version and needs no new permission. A name given with profile_rename is
+  kept. A profile also takes its name back from an old copy it no longer
+  runs, and an older extension claiming the server's --profile name is
+  treated as a suggestion, so it can no longer knock off the Chrome profile
+  of that name.
+- fix: the first Connect in a profile no longer fails with "sendNativeMessage
+  is not a function". The extension restarts itself once and finishes pairing.
+- fix: an extension loaded from a folder notices when Chrome is still running
+  older code than the files on disk and reloads itself. Before, the check read
+  the version Chrome reported, which already showed the new number, so the
+  extension could stay on old code for days ("Could not reach the extension",
+  "Client authorization is missing, stale or invalid").
+- feat: when the server knows of a newer extension, the extension asks Chrome
+  to check the Web Store at once and installs the update as soon as no command
+  is running, with no Reload or Chrome restart.
+- fix: a session sharing another session's browser access re-signs a command
+  once if the browser reconnected while it was being sent, instead of failing
+  with a stale authorization.
+- fix: an error now names the profile running extension code too old for app
+  approvals and says to click Reload in chrome://extensions.
+- feat: the popup opens by itself for a blocked site, an app approval or a
+  permission request, and waiting calls continue as soon as you approve.
+- fix: Settings no longer keeps showing "Connecting..." after it connected.
+
 ## 0.9.34 - 2026-10-22
 
 Approvals no longer need the agent to keep checking, and the popup comes back

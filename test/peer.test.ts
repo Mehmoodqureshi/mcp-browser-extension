@@ -202,3 +202,59 @@ test('a rename made through a peer lands on the hub', async () => {
     await hub.stop();
   }
 });
+
+test('a peer that signed for a browser\'s old connection re-signs once instead of being refused', async () => {
+  const port = await freePort();
+  const hub = bridge(port);
+  const peer = bridge(port);
+  /** A fake extension that refuses any proof not signed for its current challenge, like Chrome does. */
+  async function strictExtension(): Promise<{ ws: WebSocket; challenge: string }> {
+    const challenge = randomUUID();
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    await once(ws, 'open');
+    const welcomed = new Promise<void>((resolve) => {
+      ws.on('message', (raw) => {
+        const f = JSON.parse(raw.toString());
+        if (f.type === 'welcome') resolve();
+        else if (f.type === 'command') {
+          ws.send(JSON.stringify(f.authorization?.challenge === challenge
+            ? { type: 'result', v: PROTOCOL_VERSION, id: f.id, ok: true, data: { ok: true } }
+            : { type: 'result', v: PROTOCOL_VERSION, id: f.id, ok: false, error: { code: 'POLICY_DENIED', message: 'stale' } }));
+        }
+      });
+    });
+    ws.send(JSON.stringify({
+      type: 'hello', caps: [CLIENT_APPROVAL_CAP], approvalChallenge: challenge, v: PROTOCOL_VERSION, token: TOKEN,
+      ext: { id: 'ext', version: '1', chrome: '1' }, profile: 'asad',
+    }));
+    await welcomed;
+    return { ws, challenge };
+  }
+  try {
+    await hub.start();
+    const first = await strictExtension();
+    await peer.start();
+    const link = (peer as unknown as { hub: { profiles: { name: string; approvalChallenge?: string }[] } }).hub;
+    await until(() => link.profiles.some((p) => p.approvalChallenge === first.challenge));
+    const stale = link.profiles;
+
+    first.ws.close();
+    const second = await strictExtension();
+    await until(() => link.profiles.some((p) => p.approvalChallenge === second.challenge));
+    // Reproduce the race: the peer signs from the state it held before the reconnect reached it.
+    const fresh = link.profiles;
+    let reads = 0;
+    let current = fresh;
+    Object.defineProperty(link, 'profiles', {
+      configurable: true,
+      get: () => (reads++ === 0 ? stale : current),
+      set: (v) => { current = v; },
+    });
+
+    assert.deepEqual(await peer.sendCommand('get_text', {}, { profile: 'asad' }), { ok: true });
+    second.ws.close();
+  } finally {
+    await peer.stop();
+    await hub.stop();
+  }
+});

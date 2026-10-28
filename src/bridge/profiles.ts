@@ -28,6 +28,8 @@ interface InstallRecord {
   name: string;
   firstSeen: string;
   lastSeen: string;
+  /** Named with profile_rename: the person's choice, never replaced automatically. */
+  renamed?: boolean;
 }
 
 interface RegistryFile {
@@ -59,23 +61,48 @@ export class ProfileRegistry {
   }
 
   /**
-   * Name for an install with no explicit label: its remembered name, else the
-   * first of "default", "profile-2", ... that no other install owns and
-   * `isLive(name)` doesn't report as held by someone else right now.
+   * Name for an install with no explicit label, first that fits:
+   *   1. a name given with profile_rename, kept for good;
+   *   2. each of `preferred` in order (the pairing helper's suggestion, then the
+   *      Chrome profile's own name), but only while no other install owns it or
+   *      holds it live: a preference never takes a name from another browser;
+   *   3. `own`, the Chrome profile's own name: unlike a preference it may be
+   *      taken back from an install that is offline (an old copy that profile
+   *      no longer runs), unless that one was named with profile_rename;
+   *   4. its remembered name, unless another browser holds it right now;
+   *   5. the first of "default", "profile-2", ... nobody owns or holds.
    */
-  assign(installId: string, isLive: (name: string) => boolean): string {
+  assign(
+    installId: string,
+    isLive: (name: string) => boolean,
+    preferred: (string | undefined)[] = [],
+    own?: string,
+  ): string {
     const now = new Date().toISOString();
     const known = this.installs[installId];
-    if (known) {
-      known.lastSeen = now;
+    const keep = (name: string, renamed = false): string => {
+      this.installs[installId] = { name, firstSeen: known?.firstSeen ?? now, lastSeen: now, ...(renamed ? { renamed } : {}) };
       this.save();
-      return known.name;
+      return name;
+    };
+    if (known?.renamed && !isLive(known.name)) return keep(known.name, true);
+    for (const name of preferred) {
+      if (!name) continue;
+      const owner = this.ownerOf(name);
+      if ((owner === undefined || owner === installId) && !isLive(name)) return keep(name);
     }
+    if (own && !isLive(own)) {
+      const owner = this.ownerOf(own);
+      if (owner === undefined || owner === installId || !this.installs[owner].renamed) {
+        // The old owner is offline; if it ever returns it is named afresh.
+        if (owner !== undefined && owner !== installId) delete this.installs[owner];
+        return keep(own);
+      }
+    }
+    if (known && !isLive(known.name)) return keep(known.name);
     let name = FIRST_AUTO_NAME;
-    for (let n = 2; this.ownerOf(name) !== undefined || isLive(name); n++) name = `profile-${n}`;
-    this.installs[installId] = { name, firstSeen: now, lastSeen: now };
-    this.save();
-    return name;
+    for (let n = 2; (this.ownerOf(name) ?? installId) !== installId || isLive(name); n++) name = `profile-${n}`;
+    return keep(name);
   }
 
   /**
@@ -95,6 +122,7 @@ export class ProfileRegistry {
     if (target === from) return target;
     if (this.ownerOf(target) !== undefined) throw new Error(`profile "${target}" is already taken`);
     this.installs[id].name = target;
+    this.installs[id].renamed = true;
     this.save();
     return target;
   }

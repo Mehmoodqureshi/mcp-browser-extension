@@ -32,11 +32,56 @@ import { permittedSites } from '../site-access';
 import { applyPairing, fetchPairing, requestPairingFromClick } from '../connect';
 import { PROXY_STORAGE_KEY, applyProxy, onProxyAuth, proxyStatus } from './proxy';
 
+const PAIR_AFTER_RESTART_KEY = 'pairAfterRestart';
+
+// --- store updates -------------------------------------------------------------
+// Chrome checks the Web Store for updates only every few hours. When the server
+// says a newer extension exists, ask Chrome now, and apply the update as soon as
+// no command is running, so nobody has to click Reload or restart Chrome.
+let commandsRunning = 0;
+let updateReady = false;
+let updateCheckedFor = '';
+
+function runningVersion(): string {
+  return typeof __MBE_BUILD_VERSION__ === 'string' ? __MBE_BUILD_VERSION__ : chrome.runtime.getManifest().version;
+}
+
+function isNewer(a: string, b: string): boolean {
+  const parse = (v: string): number[] => (/^(\d+)\.(\d+)\.(\d+)/.exec(v) ?? []).slice(1).map(Number);
+  const x = parse(a);
+  const y = parse(b);
+  if (x.length !== 3 || y.length !== 3) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i];
+  return false;
+}
+
+function checkForStoreUpdate(latest: string | null): void {
+  if (!latest || latest === updateCheckedFor || !isNewer(latest, runningVersion())) return;
+  updateCheckedFor = latest;
+  // An unpacked copy answers "no_update"; it reloads from disk instead (reloadIfFilesChanged).
+  void chrome.runtime.requestUpdateCheck().catch(() => undefined);
+}
+
+function applyUpdateWhenIdle(): void {
+  updateReady = true;
+  if (commandsRunning > 0) return; // the last running command applies it
+  console.info('[mcp-browser-extension] applying the downloaded update');
+  chrome.runtime.reload();
+}
+
+// Listening here means Chrome leaves applying the update to us.
+chrome.runtime.onUpdateAvailable.addListener(() => applyUpdateWhenIdle());
+
+/** Set by build-ext.mjs to the manifest version this code was built from. */
+declare const __MBE_BUILD_VERSION__: string | undefined;
+
 interface PairConfig {
   wsPort: number;
   token: string;
   /** Routing label typed into Options; empty lets the server name this browser. */
   profile: string;
+  /** Name proposed by the pairing helper; the server uses it only if it is free. */
+  suggestedProfile: string;
   /** Stable random id for this install (one per Chrome profile). */
   installId: string;
 }
@@ -101,7 +146,13 @@ function clearReconnect(): void {
 }
 
 const ws = new WsClient({
-  onCommand: (cmd, reply) => void router.dispatch(cmd, reply),
+  onCommand: (cmd, reply) => {
+    commandsRunning++;
+    void router.dispatch(cmd, reply).finally(() => {
+      commandsRunning--;
+      if (updateReady) applyUpdateWhenIdle();
+    });
+  },
   onState: (state) => {
     void persistState(state);
     if (state === 'connected') clearReconnect();
@@ -134,7 +185,10 @@ const ws = new WsClient({
   onProfile: (profile) => void chrome.storage.local.set({ pairedProfile: profile }),
   onGranted: (granted) => void chrome.storage.local.set({ grantedSites: granted }),
   onBlocked: (host, method) => void rememberBlocked(host, method),
-  onLatestExtension: (version) => void chrome.storage.local.set({ latestExtension: version }),
+  onLatestExtension: (version) => {
+    void chrome.storage.local.set({ latestExtension: version });
+    checkForStoreUpdate(version);
+  },
   log: (m) => console.debug('[mcp-browser-extension]', m),
 });
 const approvals = new ClientApprovals({
@@ -237,17 +291,18 @@ async function adoptBundledPairing(): Promise<boolean> {
  * Self-update for unpacked installs. The server mirrors a new extension build
  * into this folder on every boot; Chrome keeps running the old one until the
  * extension is reloaded. An unpacked extension reads its own files from disk,
- * so compare the manifest on disk with the one Chrome loaded and reload once
- * per new version. A packed (Web Store) install always sees its own manifest,
- * so this is a no-op there. Guarded by storage so a broken manifest on disk
- * cannot cause a reload loop.
+ * so compare the manifest on disk with the version this code was built as and
+ * reload once per new version. Not getManifest(): Chrome can report the new
+ * manifest while this worker still runs an older build. A packed (Web Store)
+ * install always matches its own manifest, so this is a no-op there. Guarded
+ * by storage so a broken manifest on disk cannot cause a reload loop.
  */
 async function reloadIfFilesChanged(): Promise<void> {
   try {
     const res = await fetch(chrome.runtime.getURL('manifest.json'), { cache: 'no-store' });
     if (!res.ok) return;
     const onDisk = (await res.json()) as { version?: unknown };
-    const loaded = chrome.runtime.getManifest().version;
+    const loaded = typeof __MBE_BUILD_VERSION__ === 'string' ? __MBE_BUILD_VERSION__ : chrome.runtime.getManifest().version;
     if (typeof onDisk.version !== 'string' || onDisk.version === loaded) return;
     const { reloadedFor } = await chrome.storage.local.get('reloadedFor');
     if (reloadedFor === onDisk.version) return; // already tried this version once
@@ -273,16 +328,27 @@ async function ensureInstallId(installId: unknown): Promise<string> {
 }
 
 async function getConfig(): Promise<PairConfig | null> {
-  const { wsPort, token, profile, installId } = await chrome.storage.local.get([
+  const { wsPort, token, profile, suggestedProfile, pairingSource, installId } = await chrome.storage.local.get([
     'wsPort',
     'token',
     'profile',
+    'suggestedProfile',
+    'pairingSource',
     'installId',
   ]);
   // wsPort must be > 0 — a stored 0 would dial ws://127.0.0.1:0 (ERR_UNSAFE_PORT).
   if (typeof wsPort === 'number' && wsPort > 0 && typeof token === 'string' && token.length > 0) {
     const label = typeof profile === 'string' ? profile.trim() : '';
-    return { wsPort, token, profile: label, installId: await ensureInstallId(installId) };
+    const suggested = typeof suggestedProfile === 'string' ? suggestedProfile.trim() : '';
+    // Before suggestions existed, Connect saved the helper's name as `profile`.
+    // That name was never typed by the person, so it must not take names over.
+    const fromHelper = pairingSource === 'native' && label !== '';
+    return {
+      wsPort, token,
+      profile: fromHelper ? '' : label,
+      suggestedProfile: suggested || (fromHelper ? label : ''),
+      installId: await ensureInstallId(installId),
+    };
   }
   return null;
 }
@@ -410,7 +476,7 @@ async function ensureConnected(): Promise<void> {
   const cfg = await getConfig();
   if (!cfg) return;
   const install = await installType();
-  if (!access.stopped) ws.connect(cfg.wsPort, cfg.token, cfg.profile, cfg.installId, install);
+  if (!access.stopped) ws.connect(cfg.wsPort, cfg.token, cfg.profile, cfg.installId, install, cfg.suggestedProfile);
 }
 
 // --- keepalive: an awaited extension-API call resets the 30s idle timer -----
@@ -490,11 +556,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[FEATURE_REQUESTS_KEY]) void refreshFeatureBadge();
   if (area === 'local' && changes.tabBorder?.newValue === false) void border.clearAll();
   if (area === 'local' && changes[PROXY_STORAGE_KEY]) void syncProxy();
-  if (area === 'local' && (changes.wsPort || changes.token || changes.profile)) {
+  if (area === 'local' && (changes.wsPort || changes.token || changes.profile || changes.suggestedProfile)) {
     // New pairing config (e.g. from the options page) → clear any prior reject and
     // reconnect so a changed profile re-pairs under the new routing label.
     if (ws.state === 'unauthorized' || ws.state === 'superseded') ws.state = 'idle';
-    if (changes.profile) ws.close(); // force a fresh hello with the new profile
+    if (changes.profile || changes.suggestedProfile) ws.close(); // force a fresh hello with the new profile
     clearReconnect();
     void ensureConnected();
   }
@@ -510,6 +576,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
     }
     // No await before the permission API: messaging carries the click's gesture.
     void requestPairingFromClick().then(async (result) => {
+      if (!result.ok && result.error === 'restart_needed') {
+        // The permission is granted now; a fresh worker gets the native API.
+        await chrome.storage.local.set({ [PAIR_AFTER_RESTART_KEY]: true });
+        reply({ ok: true });
+        setTimeout(() => chrome.runtime.reload(), 200);
+        return;
+      }
       if (!result.ok) { reply(result); return; }
       if (access.stopped) { reply({ ok: false, message: 'Access is stopped. Use Resume connection first.' }); return; }
       await applyPairing(result);
@@ -700,6 +773,11 @@ async function bootstrap(): Promise<void> {
   await chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
   await syncProxy();
   await reloadIfFilesChanged();
+  // Connect was clicked just before a restart that enabled the native helper.
+  if ((await chrome.storage.local.get(PAIR_AFTER_RESTART_KEY))[PAIR_AFTER_RESTART_KEY]) {
+    await chrome.storage.local.remove(PAIR_AFTER_RESTART_KEY);
+    if (await healFromHelper()) return; // storage changed: onChanged reconnects
+  }
   // Zero-paste pairing: if this folder carries the server's pairing.json, adopt
   // it. When that writes storage, onChanged reconnects; otherwise connect now.
   if (await adoptBundledPairing()) return; // storage changed: onChanged reconnects

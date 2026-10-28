@@ -17,6 +17,11 @@ export type PairingReply =
 
 /** Ask the helper for the pairing. Needs the nativeMessaging permission already granted. */
 export async function fetchPairing(): Promise<PairingReply> {
+  // Chrome adds this API to a running worker only after it restarts, so the
+  // first click that grants nativeMessaging cannot use it yet.
+  if (typeof chrome.runtime.sendNativeMessage !== 'function') {
+    return { ok: false, error: 'restart_needed', message: 'Finishing setup. Click Connect again if this stays.' };
+  }
   try {
     const reply = (await chrome.runtime.sendNativeMessage(NATIVE_HOST, { type: 'pairing' })) as PairingReply | undefined;
     return reply ?? { ok: false, message: 'The helper gave no answer.' };
@@ -40,8 +45,9 @@ export async function applyPairing(reply: Extract<PairingReply, { ok: true }>): 
   await chrome.storage.local.set({
     wsPort: reply.port,
     token: reply.token,
-    // The server's own --profile when it set one; otherwise let the server name us.
-    ...(reply.profile ? { profile: reply.profile } : {}),
+    // The server's own --profile, as a suggestion only: another browser may
+    // already use that name, and taking it over would disconnect that one.
+    suggestedProfile: reply.profile ?? '',
     pairingSource: 'native',
   });
 }

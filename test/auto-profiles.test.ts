@@ -48,7 +48,7 @@ class Fake {
       }
     });
   }
-  static async open(port: number, tag: string, opts: { installId?: string; profile?: string } = {}): Promise<Fake> {
+  static async open(port: number, tag: string, opts: { installId?: string; profile?: string; suggestedProfile?: string } = {}): Promise<Fake> {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await once(ws, 'open');
     const fake = new Fake(ws, tag);
@@ -66,8 +66,23 @@ class Fake {
   }
 }
 
-async function server(dataDir?: string): Promise<{ bridge: BridgeServer; port: number }> {
-  const bridge = new BridgeServer({ token: TOKEN, serverVersion: 't', port: 0, heartbeatMs: 0, dataDir });
+async function until(cond: () => boolean, ms = 5_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > deadline) throw new Error('condition not met in time');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+async function server(
+  dataDir?: string,
+  chromeNames?: Record<string, string>,
+  helperProfile?: string,
+): Promise<{ bridge: BridgeServer; port: number }> {
+  const chromeProfiles = chromeNames
+    ? { nameOf: (_ext: unknown, id: string) => chromeNames[id], keys: () => Object.values(chromeNames).map((n) => n.toLowerCase()) }
+    : null;
+  const bridge = new BridgeServer({ token: TOKEN, serverVersion: 't', port: 0, heartbeatMs: 0, dataDir, chromeProfiles, helperProfile });
   const port = await bridge.start();
   return { bridge, port };
 }
@@ -203,4 +218,95 @@ test('registry ignores a corrupt or hostile profiles.json', () => {
   const reg = new ProfileRegistry(dir);
   assert.equal(reg.ownerOf('evil'), undefined);
   assert.equal(reg.assign(ID_A, () => false), 'default');
+});
+
+test('three browsers paired with one click and the same suggested name all stay paired', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cmcp-suggest-'));
+  const { bridge, port } = await server(dir);
+  try {
+    // Connect hands every browser the server's --profile ("mehmood") as a suggestion.
+    const a = await Fake.open(port, 'A', { installId: ID_A, suggestedProfile: 'mehmood' });
+    const b = await Fake.open(port, 'B', { installId: ID_B, suggestedProfile: 'mehmood' });
+    const c = await Fake.open(port, 'C', { installId: ID_C, suggestedProfile: 'mehmood' });
+    assert.equal(a.pairedAs, 'mehmood');
+    assert.notEqual(b.pairedAs, 'mehmood');
+    assert.notEqual(c.pairedAs, 'mehmood');
+    assert.notEqual(b.pairedAs, c.pairedAs);
+    assert.equal(bridge.connectedProfiles().length, 3);
+    for (const [fake, tag] of [[a, 'A'], [b, 'B'], [c, 'C']] as const) {
+      assert.deepEqual(await bridge.sendCommand('get_text', {}, { profile: fake.pairedAs }), { from: tag });
+    }
+
+    // While A is away its name stays its own: B reconnecting does not take it.
+    a.ws.close();
+    await a.waitClose();
+    await until(() => bridge.connectedProfiles().length === 2);
+    const b2 = await Fake.open(port, 'B2', { installId: ID_B, suggestedProfile: 'mehmood' });
+    assert.equal(b2.pairedAs, b.pairedAs);
+    const a2 = await Fake.open(port, 'A2', { installId: ID_A, suggestedProfile: 'mehmood' });
+    assert.equal(a2.pairedAs, 'mehmood');
+    assert.equal(bridge.connectedProfiles().length, 3);
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('each browser is named after its Chrome profile, without taking a name another browser has', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cmcp-chromename-'));
+  const chromeNames: Record<string, string> = { [ID_A]: 'mehmood', [ID_B]: 'Mehmood701', [ID_C]: 'muhammad' };
+  const { bridge, port } = await server(dir, chromeNames);
+  try {
+    // Every Connect suggests the server's --profile; A gets it, B and C get their Chrome profile names.
+    const a = await Fake.open(port, 'A', { installId: ID_A, suggestedProfile: 'mehmood' });
+    const b = await Fake.open(port, 'B', { installId: ID_B, suggestedProfile: 'mehmood' });
+    const c = await Fake.open(port, 'C', { installId: ID_C });
+    assert.deepEqual([a.pairedAs, b.pairedAs, c.pairedAs], ['mehmood', 'mehmood701', 'muhammad']);
+    assert.deepEqual(await bridge.sendCommand('get_text', {}, { profile: 'mehmood701' }), { from: 'B' });
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('a name given with profile_rename is kept over the Chrome profile name', () => {
+  const reg = new ProfileRegistry();
+  assert.equal(reg.assign(ID_A, () => false, ['profile-x']), 'profile-x');
+  reg.rename('profile-x', 'work');
+  assert.equal(reg.assign(ID_A, () => false, ['mehmood']), 'work');
+});
+
+test('an auto-named browser moves to its Chrome profile name once it is free', () => {
+  const reg = new ProfileRegistry();
+  assert.equal(reg.assign(ID_A, () => false), 'default');
+  assert.equal(reg.assign(ID_A, () => false, [undefined], 'mehmood701'), 'mehmood701');
+});
+
+test('an older extension claiming the helper\'s name cannot take it from the Chrome profile of that name', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cmcp-oldclaim-'));
+  const chromeNames: Record<string, string> = { [ID_A]: 'mehmood', [ID_B]: 'muhammad' };
+  const { bridge, port } = await server(dir, chromeNames, 'mehmood');
+  try {
+    // 0.9.34 sends the helper's name as `profile`, as if typed. B is the muhammad profile.
+    const b = await Fake.open(port, 'B', { installId: ID_B, profile: 'mehmood' });
+    const a = await Fake.open(port, 'A', { installId: ID_A, profile: 'mehmood' });
+    assert.equal(b.pairedAs, 'muhammad');
+    assert.equal(a.pairedAs, 'mehmood');
+    assert.equal(bridge.connectedProfiles().length, 2);
+    // Any other typed name still wins as before.
+    const c = await Fake.open(port, 'C', { installId: ID_C, profile: 'work' });
+    assert.equal(c.pairedAs, 'work');
+  } finally {
+    await bridge.stop();
+  }
+});
+
+test('a Chrome profile takes its own name back from an old install it no longer runs', () => {
+  const reg = new ProfileRegistry();
+  assert.equal(reg.assign(ID_A, () => false, ['muhammad']), 'muhammad'); // old copy, now gone
+  assert.equal(reg.assign(ID_B, () => false, [], 'muhammad'), 'muhammad');
+  assert.equal(reg.ownerOf('muhammad'), ID_B);
+  // ...but never while the other one is connected, nor from a name set with profile_rename.
+  assert.equal(reg.assign(ID_C, (n) => n === 'mehmood', [], 'mehmood'), 'default');
+  reg.rename('muhammad', 'work');
+  assert.notEqual(reg.assign(ID_A, () => false, [], 'work'), 'work');
+  assert.equal(reg.ownerOf('work'), ID_B);
 });

@@ -479,7 +479,7 @@ test('an older extension can pair for setup but cannot receive browser commands'
     await ext.welcomed;
     let commands = 0;
     ext.onCommand = (cmd) => { commands++; ext.result(cmd.id, {}); };
-    await assert.rejects(server.sendCommand('tabs_list', {}), /Update the extension and MCP server together/);
+    await assert.rejects(server.sendCommand('tabs_list', {}), /running extension code too old to check app approvals/);
     assert.equal(commands, 0);
     await server.sendCommand('ping_probe', {});
     assert.equal(commands, 1, 'only the data-free health probe reaches an older extension');

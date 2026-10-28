@@ -68,15 +68,21 @@ connectEl.addEventListener('click', async (event) => {
   connectEl.textContent = 'Connecting…';
   const res = await connectWithOneClick();
   connectEl.disabled = false;
-  connectEl.textContent = 'Connect';
   connectMsgEl.className = res.ok ? 'hint' : 'hint error';
-  connectMsgEl.textContent = res.ok ? 'Connecting…' : (res.message ?? 'Could not connect.');
+  connectMsgEl.textContent = res.ok ? '' : (res.message ?? 'Could not connect.');
+  // The connection may already be up by now: show the live state, not a guess.
+  const { connState } = await chrome.storage.local.get('connState');
+  render(typeof connState === 'string' ? connState : 'connecting');
 });
 
 function render(state: string): void {
   // Always offered: "Connect" while unpaired, "Connect again" to re-pair on purpose.
   quickEl.hidden = false;
   if (!connectEl.disabled) connectEl.textContent = state === 'connected' ? 'Connect again' : 'Connect';
+  // Follow the live state; a Connect error stays until the next click.
+  if (!connectMsgEl.classList.contains('error')) {
+    connectMsgEl.textContent = state === 'connected' ? 'Connected.' : state === 'connecting' ? 'Connecting…' : '';
+  }
   const labels: Record<string, string> = {
     connected: 'connected',
     connecting: '… connecting',

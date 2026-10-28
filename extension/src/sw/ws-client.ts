@@ -59,7 +59,7 @@ export class WsClient {
     return this.state === 'connected' && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  connect(port: number, token: string, profile?: string, installId?: string, install?: string): void {
+  connect(port: number, token: string, profile?: string, installId?: string, install?: string, suggestedProfile?: string): void {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -84,6 +84,7 @@ export class WsClient {
         ext: { id: chrome.runtime.id, version: chrome.runtime.getManifest().version, chrome: chromeVersion() },
         profile: profile && profile.trim() ? profile.trim() : undefined,
         installId,
+        ...(suggestedProfile ? { suggestedProfile } : {}),
         ...(install ? { install } : {}),
         // This build gates fail-closed and reports tab URLs on results, so the
         // server may skip its pre-flight tabs_list. An older build omits this and

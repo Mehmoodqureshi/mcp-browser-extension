@@ -256,6 +256,9 @@ export interface HelloFrame extends BaseFrame {
    *  Chrome profile. With no `profile` label, the server names the browser from it
    *  ("default", "profile-2", ...) so two blank-profile browsers never collide. */
   installId?: string;
+  /** A name the pairing helper proposed (the server's --profile). Used only when
+   *  no other browser has it; unlike `profile`, it never takes a name over. */
+  suggestedProfile?: string;
   /** How Chrome installed this copy (`chrome.management` installType):
    *  "normal" for the store, "development" for unpacked. Unpacked builds carry
    *  the store key, so the id alone cannot tell them apart. */

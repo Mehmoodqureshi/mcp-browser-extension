@@ -23,8 +23,12 @@ if (hadManifest && (!previousManifest || Array.isArray(previousManifest) || type
 }
 
 mkdirSync(outDir, { recursive: true });
+const manifest = JSON.parse(readFileSync(join(extRoot, 'manifest.json'), 'utf8'));
 
 await build({
+  // The worker compares this with the manifest on disk. getManifest() is not
+  // enough: Chrome can report the new manifest while still running old code.
+  define: { __MBE_BUILD_VERSION__: JSON.stringify(manifest.version) },
   entryPoints: {
     background: join(extRoot, 'src/sw/background.ts'),
     options: join(extRoot, 'src/options/options.ts'),
@@ -45,7 +49,6 @@ await build({
 // the one-click pairing helper allows. The store zip leaves it out (the store
 // rejects a manifest with "key"); see pack-ext.mjs. A public key, not a secret.
 const STORE_PUBLIC_KEY = readFileSync(join(extRoot, 'store-public-key.txt'), 'utf8').trim();
-const manifest = JSON.parse(readFileSync(join(extRoot, 'manifest.json'), 'utf8'));
 if (previousManifest) {
   if (previousManifest.key !== undefined) manifest.key = previousManifest.key;
   else delete manifest.key;
