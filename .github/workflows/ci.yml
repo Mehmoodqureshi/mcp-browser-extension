@@ -12,11 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
+        node-version: [20, 24]
         # Windows guards against POSIX-only assumptions (the 0600 mode check in
         # bridge/auth.ts, `ps`, .cmd bin shims) regressing for native-Windows
-        # users, on the same oldest and newest Node as Linux.
-        os: [ubuntu-latest, windows-latest]
-        node-version: [20, 24]
+        # users. Not Node 20: it cannot expand the test script's
+        # dist/test/*.test.js on Windows, and finds no tests.
+        include:
+          - os: windows-latest
+            node-version: 22
+          - os: windows-latest
+            node-version: 24
     name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +55,9 @@ jobs:
   e2e:
     # The real extension in Playwright's headless Chromium, against fixture
     # pages served by the test itself: no secrets, no network, no real profile.
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright cannot install
+    # Chromium on yet.
+    runs-on: ubuntu-24.04
     name: Browser E2E / Node 24
     timeout-minutes: 30
     steps:
