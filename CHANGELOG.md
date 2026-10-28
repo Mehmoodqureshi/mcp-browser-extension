@@ -1,3 +1,14 @@
+## 0.9.36 - 2026-10-28
+
+Server-only fix; the Chrome extension stays at 0.9.35.
+
+- fix: an older extension (0.9.34 and before) that saved the name Connect gave
+  it could still take that name from the Chrome profile it belongs to when the
+  shared server had been started with a different --profile. The server now
+  also treats a claimed name as a suggestion when it is another Chrome
+  profile's name on this computer, whichever session runs the shared server,
+  so each browser keeps its own Chrome profile name.
+
 ## 0.9.35 - 2026-10-28
 
 Several Chrome profiles now stay connected side by side, and the extension

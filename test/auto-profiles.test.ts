@@ -310,3 +310,19 @@ test('a Chrome profile takes its own name back from an old install it no longer 
   assert.notEqual(reg.assign(ID_A, () => false, [], 'work'), 'work');
   assert.equal(reg.ownerOf('work'), ID_B);
 });
+
+test('an older extension claiming another Chrome profile\'s name is renamed whatever the server\'s --profile', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cmcp-otherclaim-'));
+  const chromeNames: Record<string, string> = { [ID_A]: 'mehmood', [ID_B]: 'muhammad' };
+  // This server runs with a different --profile than the name the old extension saved.
+  const { bridge, port } = await server(dir, chromeNames, 'mehmood701');
+  try {
+    const a = await Fake.open(port, 'A', { installId: ID_A, profile: 'mehmood' });
+    const b = await Fake.open(port, 'B', { installId: ID_B, profile: 'mehmood' });
+    assert.equal(a.pairedAs, 'mehmood');
+    assert.equal(b.pairedAs, 'muhammad');
+    assert.equal(bridge.connectedProfiles().length, 2);
+  } finally {
+    await bridge.stop();
+  }
+});

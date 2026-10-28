@@ -809,6 +809,14 @@ export class BridgeServer {
   private nameFor(frame: Partial<HelloFrame>): { profile: string; naming: ProfileNaming; installId?: string } {
     const installId = isValidInstallId(frame.installId) ? frame.installId : undefined;
     const helperProfile = this.opts.helperProfile ?? resolveProfile();
+    // Chrome won't tell an extension its profile, but we can look it up on disk.
+    const chrome = !installId || this.opts.chromeProfiles === null ? null
+      : this.opts.chromeProfiles ?? { nameOf: chromeProfileName, keys: () => chromeProfileKeys() };
+    const own = installId ? chrome?.nameOf(frame.ext?.id, installId) : undefined;
+    const ownKey = own ? profileKeyFromChromeName(own) : undefined;
+    let otherProfiles: string[] | undefined;
+    const isOtherChromeProfile = (name: string): boolean =>
+      name !== ownKey && (otherProfiles ??= chrome?.keys() ?? []).includes(name);
     let suggested: string | undefined;
     if (typeof frame.suggestedProfile === 'string' && frame.suggestedProfile.trim()) {
       try { suggested = sanitizeName(frame.suggestedProfile, 'profile'); } catch { /* ignore an unusable hint */ }
@@ -817,8 +825,10 @@ export class BridgeServer {
       const label = routeKey(frame.profile);
       // Extensions before 0.9.35 saved the helper's name as if it was typed, so
       // every browser paired with Connect claimed it and knocked the others off.
-      // That exact name is a suggestion; any other label is the person's choice.
-      if (!installId || helperProfile === DEFAULT_PROFILE || label !== helperProfile) {
+      // A label that is the helper's name, or another Chrome profile's name on
+      // this computer, is a suggestion; any other label is the person's choice.
+      const fromHelper = helperProfile !== DEFAULT_PROFILE && label === helperProfile;
+      if (!installId || !(fromHelper || isOtherChromeProfile(label))) {
         return { profile: label, naming: 'options', installId };
       }
       suggested = label;
@@ -828,13 +838,8 @@ export class BridgeServer {
       const conn = this.conns.get(name);
       return !!conn && conn.isOpen() && this.origins.get(name)?.installId !== installId;
     };
-    // Chrome won't tell an extension its profile, but we can look it up on disk.
-    const chrome = this.opts.chromeProfiles === null ? null
-      : this.opts.chromeProfiles ?? { nameOf: chromeProfileName, keys: () => chromeProfileKeys() };
-    const own = chrome?.nameOf(frame.ext?.id, installId);
-    const ownKey = own ? profileKeyFromChromeName(own) : undefined;
     // Never hand a browser the name of a different Chrome profile on this computer.
-    if (suggested && suggested !== ownKey && chrome?.keys().includes(suggested)) suggested = undefined;
+    if (suggested && isOtherChromeProfile(suggested)) suggested = undefined;
     return { profile: this.registry.assign(installId, heldByOther, [suggested], ownKey), naming: 'auto', installId };
   }
 
