@@ -367,7 +367,18 @@ async function onAllowlist(policy: WirePolicy): Promise<void> {
 }
 
 /** The server refused `host`: list it on the Options page, flag the toolbar icon and show the popup. */
-async function rememberBlocked(host: string, method: string): Promise<void> {
+// Refusals arrive back to back (the server re-asks while it waits). One at a
+// time, so a second refusal never reads the list before the first one's write
+// lands and pops the popup again or drops an entry.
+let blockedQueue: Promise<void> = Promise.resolve();
+
+function rememberBlocked(host: string, method: string): Promise<void> {
+  const next = blockedQueue.then(() => recordBlocked(host, method));
+  blockedQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function recordBlocked(host: string, method: string): Promise<void> {
   const { blockedSites, dismissedSites } = await chrome.storage.local.get(['blockedSites', 'dismissedSites']);
   const listed = Array.isArray(blockedSites) ? (blockedSites as BlockedSite[]) : [];
   const prior = listed.filter((b) => b.host !== host);
