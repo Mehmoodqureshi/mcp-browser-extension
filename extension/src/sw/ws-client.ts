@@ -14,6 +14,7 @@ import {
   WIRE_CAP_FILL_FORM,
   WIRE_CAP_PROXY,
   WIRE_CAP_TAB_URL,
+  WIRE_CAP_SITE_CHECKS,
   type CommandFrame,
   type ErrorFrame,
   type ResultFrame,
@@ -38,6 +39,7 @@ export interface WsClientDeps {
   onGranted?: (granted: string[] | null) => void;
   /** The extension version bundled with the server (null: an older server that does not say). */
   onLatestExtension?: (version: string | null) => void;
+  onSiteChecks?: (supported: boolean) => void;
   /** The server refused a call because `host` is not on the allowlist. */
   onBlocked?: (host: string, method: string) => void;
   log: (message: string) => void;
@@ -89,7 +91,7 @@ export class WsClient {
         // This build gates fail-closed and reports tab URLs on results, so the
         // server may skip its pre-flight tabs_list. An older build omits this and
         // the server keeps fetching the URL itself.
-        caps: [WIRE_CAP_TAB_URL, WIRE_CAP_FILL_FORM, WIRE_CAP_PROXY, CLIENT_APPROVAL_CAP],
+        caps: [WIRE_CAP_TAB_URL, WIRE_CAP_FILL_FORM, WIRE_CAP_PROXY, CLIENT_APPROVAL_CAP, WIRE_CAP_SITE_CHECKS],
       };
       ws.send(JSON.stringify(hello));
     };
@@ -104,6 +106,7 @@ export class WsClient {
       }
       switch (frame.type) {
         case 'welcome':
+          this.deps.onSiteChecks?.(frame.siteChecks === true);
           this.deps.onPolicy(frame.policy);
           if (typeof frame.profile === 'string') this.deps.onProfile?.(frame.profile);
           this.deps.onGranted?.(Array.isArray(frame.granted) ? frame.granted : null);

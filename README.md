@@ -53,12 +53,12 @@ Chrome, so a page the agent opens is the page you would see.
 Other tools drive a signed-in Chrome too (the `hangwin/mcp-chrome` extension,
 for one), so the question is what you get on top of the session:
 
-- **A per-domain allowlist, deny-all by default.** With no flags the agent can
-  read nothing. `--allow-domain mail.google.com --allow-domain github.com`
-  opens exactly those hosts (`*.example.com` covers a domain and its
-  subdomains); every other site is refused before the call reaches the page.
-  Reads are gated, not only clicks, and the extension re-checks the same policy
-  on its side. Mutations, eval, downloads and uploads are separate opt-ins.
+- **Website checks with explicit Chrome permission.** Local suspicious-site
+  checks are on by default. After one Chrome permission grant, ordinary sites
+  work automatically and flagged sites need Allow. Named-site approval remains
+  available; `--no-site-grants` enforces the server's fixed allowlist. Reads and
+  actions are checked in the extension. Mutations, eval, downloads and uploads
+  are separate opt-ins.
 - **Password values are never returned**, and `--redact` scrubs tokens, API
   keys and JWTs out of page reads.
 - **An audit trail**: every call is logged with the URL, the allow/deny
@@ -142,10 +142,11 @@ with `/mcp` inside a session — no restart needed.
 
 </details>
 
-By default everything is **deny-all** (no domains, no eval, no mutations). Grant
-exactly what you need with `--allow-domain <glob>` (repeatable), `--enable-mutations`,
-`--enable-downloads`, `--enable-uploads`, or `--unsafe-enable-eval`. All-site access
-is not supported; approve named websites in the Chrome extension popup.
+Website access requires app approval and Chrome permission. Suspicious-site
+checks are on by default; click **Allow website access** once in the extension.
+For a fixed named-site policy, use `--no-site-grants --allow-domain <glob>`.
+Mutations, downloads, uploads and eval stay off until enabled with
+`--enable-mutations`, `--enable-downloads`, `--enable-uploads` or `--unsafe-enable-eval`.
 
 Email verification is on by default. For a trusted, local unattended setup, you
 can opt out with `--no-email-verification` (or set
@@ -224,7 +225,22 @@ connection creates a new key and needs a new approval. **Remove access** blocks 
 commands from that key; an action already running may finish. YOLO, bypass-permission
 mode and `--no-email-verification` cannot skip this extension check.
 
-**6. Allow the websites you need.** The popup shows a Website access request.
+**6. Allow website access once.** Suspicious-site checks are on by default. In the
+popup or Settings, **Allow website access** asks Chrome for HTTP/HTTPS access. After
+you accept, ordinary sites work without an Allow request. Local checks pause
+flagged addresses and risky login forms and show their reasons under **Waiting
+for Allow**. Allow approves only the displayed reasons for that exact origin;
+new reasons ask again. **Blocked websites** lets you block or restore any site.
+Both the extension and connected server must be updated; `--no-site-grants`
+disables this option.
+
+These checks run locally with no external checking service. They can miss scams
+and flag legitimate sites. Form checks run after a page loads, before app reads
+or actions; they do not prevent page scripts from running or detect all malware.
+App approval, Stop access and the configured tool permissions still apply.
+
+Choose **Use per-site approval** or **Turn off** to use named-site access instead.
+With automatic access off, the popup shows a Website access request.
 Click **Allow**, then accept Chrome's website permission prompt if shown. This
 single flow grants that named website in both Chrome and the server's allowlist.
 Allowing a website lets approved apps read and take actions there, including
@@ -707,17 +723,19 @@ status badge, and a stable pairing token (`--persist-token`).
 
 ## Security posture (default)
 
-**Deny-all safe mode.** With no policy configured: empty domain allowlist,
-`eval` off, downloads off, mutating tools off. Opt in explicitly:
+**Access requires consent.** The server starts with an empty named-site allowlist;
+the extension's default suspicious-site mode requires an explicit Chrome host
+grant before ordinary sites work automatically. Eval, downloads and mutations
+stay off until enabled. Named-site policy remains available:
 
 ```
-mcp-browser-extension --allow-domain example.com --enable-mutations
+mcp-browser-extension --no-site-grants --allow-domain example.com --enable-mutations
 mcp-browser-extension --policy ./policy.json          # see policy.example.json
 mcp-browser-extension --enable-observers              # console/network/dialog capture (patches page globals)
 mcp-browser-extension --redact                        # scrub secret-shaped strings out of page reads
 ```
 
-**Allowing a site without a restart.** When a call is refused because its site
+**Named-site mode: allowing a site without a restart.** When a call is refused because its site
 is not allowed, the extension's toolbar icon shows a `?`. Click it: the popup
 lists the blocked site with an **Allow** button, shows whether the site you are on
 is allowed (with its own Allow), and lists the allowed sites. The Options page

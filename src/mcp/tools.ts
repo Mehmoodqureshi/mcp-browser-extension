@@ -587,6 +587,13 @@ async function gatedUrl(ex: Executor, tabId?: string): Promise<string> {
  */
 async function gate(ctx: ToolCtx, method: WireMethod, opts: { url?: string; tabId?: string } = {}): Promise<void> {
   const url = opts.url ?? (isUrlGated(method) ? await gatedUrl(ctx.ex, opts.tabId) : '');
+  // New extensions own the local site mode and warning decisions. Check the
+  // capability gates here first, then ask that exact paired browser to authorise
+  // the URL. The browser checks again against the live page before execution.
+  if (isUrlGated(method) && /^https?:\/\//i.test(url) && ctx.ex.checkSiteAccess) {
+    assertUrlAllowed(url, method, { ...ctx.policy, allowDomains: [hostOf(url)] });
+    if (await ctx.ex.checkSiteAccess(url)) { noteGate(url, true); return; }
+  }
   try {
     assertUrlAllowed(url, method, ctx.policy);
   } catch (err) {
@@ -1082,7 +1089,7 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     if (action === 'compare') {
       const previous = readWatch(ws.profileDir, requireString(a, 'watchId'));
       // The site's grant may have been revoked since the checkpoint was saved.
-      assertUrlAllowed(previous.url, 'get_text', ctx.policy);
+      await gate(ctx, 'get_text', { url: previous.url });
       const diff = compareWatch(previous, clean, (s) => redactText(s, redaction(ctx.policy)).value);
       return jsonResult({ watchId: previous.id, name: previous.name, previousUrl: previous.url, currentUrl: clean.url, previousAt: new Date(previous.ts).toISOString(), checkedAt: new Date().toISOString(), ...diff });
     }

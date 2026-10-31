@@ -137,6 +137,9 @@ function globMatches(host: string, pattern: string): boolean {
 export function isDomainAllowed(url: string, policy: WirePolicy): boolean {
   const host = hostOf(url);
   if (!host) return false;
+  if (policy.automaticSites && /^https?:\/\//i.test(url)) {
+    return !(policy.blockedDomains ?? []).some((pat) => globMatches(host, pat));
+  }
   return policy.allowDomains.some((pat) => globMatches(host, pat));
 }
 
@@ -191,6 +194,9 @@ export function evaluatePolicy(url: string, method: WireMethod, policy: WirePoli
 
   if (!isDomainAllowed(url, policy)) {
     const host = hostOf(url) || url;
+    if (policy.automaticSites && /^https?:\/\//i.test(url)) return {
+      ok: false, reason: `Access to ${host} was removed. Restore it under Blocked websites in extension Settings.`,
+    };
     return { ok: false, reason: blockedDomainMessage(host) };
   }
   return { ok: true };

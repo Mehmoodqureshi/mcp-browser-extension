@@ -39,7 +39,7 @@ import {
   type WaitResult,
   type WaitUntil,
 } from './types';
-import { WIRE_CAP_FILL_FORM, fillFormTimeoutMs, type FillFormWireResult, type ProxyWireStatus } from '../../shared/protocol';
+import { WIRE_CAP_FILL_FORM, WIRE_CAP_SITE_CHECKS, fillFormTimeoutMs, type FillFormWireResult, type ProxyWireStatus } from '../../shared/protocol';
 import type { BridgeServer } from '../bridge/server';
 import { mapWireErrorCode } from '../bridge/connection';
 import { captureDownload, peekActiveWorkspace } from '../bridge/workspace';
@@ -175,6 +175,13 @@ export class ExtensionExecutor implements Executor {
   isOpeningTab(tabId: TabId): boolean {
     const until = this.openingTabs.get(tabId);
     return until !== undefined && until >= Date.now();
+  }
+
+  async checkSiteAccess(url: string): Promise<boolean> {
+    if (!this.bridge.hasCap(this.activeProfile(), WIRE_CAP_SITE_CHECKS)) return false;
+    const result = await this.send('site_check', { url }) as { checked?: boolean } | null;
+    if (result?.checked !== true) throw new ExecutorError('POLICY_DENIED', 'The extension did not confirm website access.');
+    return true;
   }
   async tabClose(tabId: TabId): Promise<{ closed: true; tabId: TabId }> {
     return (await this.send('tab_close', {}, { tabId })) as { closed: true; tabId: TabId };

@@ -147,7 +147,7 @@ async function targetTab(cmd: CommandFrame): Promise<number> {
 
 /** Methods that act on no particular tab (or create one), so there is nothing
  *  to resolve up front. */
-const TABLESS: ReadonlySet<WireMethod> = new Set<WireMethod>(['tabs_list', 'tab_new', 'ping_probe', 'download_file', 'proxy_status']);
+const TABLESS: ReadonlySet<WireMethod> = new Set<WireMethod>(['tabs_list', 'tab_new', 'ping_probe', 'site_check', 'download_file', 'proxy_status']);
 
 /**
  * Resolve the Chrome tab a command operates on ONCE, up front. The router
@@ -535,7 +535,7 @@ async function withDebugger<T>(
   return locks.run(`dbg:${tabId}`, async () => {
     const target: chrome.debugger.Debuggee = { tabId };
     const once = async (): Promise<T> => {
-      await requireSitePermission((await chrome.tabs.get(tabId)).url ?? '');
+      await requireSitePermission((await chrome.tabs.get(tabId)).url ?? '', tabId);
       await ensureAttached(tabId);
       return fn(target);
     };
@@ -813,7 +813,7 @@ export const HANDLED: ReadonlySet<WireMethod> = new Set<WireMethod>([
   'click', 'draw', 'type', 'press', 'hover', 'scroll',
   'screenshot', 'get_text', 'get_html', 'snapshot',
   'select_option', 'get_cookies', 'storage', 'eval', 'wait_for',
-  'download_file', 'upload_file', 'ping_probe',
+  'download_file', 'upload_file', 'ping_probe', 'site_check',
   'frames_list', 'observers', 'print_pdf', 'fill_form', 'proxy_status',
 ]);
 
@@ -922,8 +922,15 @@ export class ChromeExecutor {
     const allowed: number[] = [];
     const denied: string[] = [];
     for (const f of seen) {
-      if (evaluatePolicy(f.url, cmd.method, policy).ok) allowed.push(f.frameId);
-      else denied.push(f.url || `frame ${f.frameId}`);
+      if (evaluatePolicy(f.url, cmd.method, policy).ok) {
+        try {
+          await requireSitePermission(f.url, tabId, f.frameId);
+          allowed.push(f.frameId);
+        } catch (err) {
+          if (err instanceof CmdError && err.code === 'POLICY_DENIED') denied.push(f.url);
+          else throw err;
+        }
+      } else denied.push(f.url || `frame ${f.frameId}`);
     }
     if (allowed.length === 0) {
       throw new CmdError(
@@ -1277,6 +1284,7 @@ export class ChromeExecutor {
           // Frame ids are re-probed per field too: an iframe that navigates
           // mid-batch must not keep a grant the policy would no longer give it.
           write: async (op) => {
+            await requireSitePermission(await observedTabUrl(cmd, id), id);
             const out = await execOp(
               id,
               withWait(

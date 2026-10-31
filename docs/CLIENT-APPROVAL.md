@@ -25,11 +25,44 @@ profile. Expired access requires a new approval. Each initialized MCP session,
 including each remote HTTP session, receives a new key. Restarting a session
 requires approval again. Several sessions with the same name are separate keys.
 
-App approval does not approve websites. Each website must also be on the allowed
-sites list. A blocked request gives one line of instructions to click Allow next
-to that website in the Chrome popup. All-site access is no longer supported:
-remove `--unsafe-all-domains` from older configurations. Catch-all policy entries
-grant no access, including when sent by an older server.
+App approval does not supply Chrome website permission. **Suspicious-site checks**
+are selected by default. A person clicks **Allow website access** in the popup or
+Settings and accepts Chrome's optional HTTP/HTTPS permission once. Ordinary sites
+then work automatically; only local warnings need Allow. Before that grant, the
+extension asks for setup without queueing ordinary websites. **Use per-site
+approval** or **Turn off** explicitly selects the named-site mode; that choice is
+remembered. Old inherited broad permissions are still removed during migration.
+Server flags cannot supply the Chrome grant or override the browser preference, and
+`--no-site-grants` disables it. The retired `--unsafe-all-domains` flag and
+catch-all allowlist entries remain unsupported.
+
+The local rules check selected brand impersonation patterns, lookalike addresses,
+unencrypted password pages and destinations, explicit GET password forms, and
+password pages claiming a recognised brand outside its configured domains. A
+password field or an internationalised domain alone is not a warning. The brand
+list is limited, and these rules can miss scams or flag legitimate sites. This
+is not antivirus, a reputation database, or protection against prompt injection.
+Form checks run after loading, before app reads or actions; page scripts can run
+while loading. Form checks cover visible password inputs in the targeted document;
+closed shadow roots, canvas interfaces and arbitrary script-driven submissions
+are not inspected. New page states are checked on subsequent commands and between
+batched form fields; this does not make page changes and actions atomic.
+
+Warnings and approvals stay in the Chrome profile. Approval covers the displayed
+reason IDs at an exact origin (scheme, hostname and port); changed reasons need
+review again. A stale Allow click cannot approve a newly changed warning. Removing
+an exception makes the next matching check wait again. Blocked websites remain
+blocked until restored. Turning automatic access off removes its broad Chrome
+grant and returns to named-site access. Revoking that Chrome grant requires setup
+again. Automatic checks never auto-approve an app or a Chrome permission dialog.
+
+The server negotiates signed `site_check` support per paired browser, including
+through peers. It checks tool capabilities before asking that browser for a site
+decision, and the worker checks the actual page again before execution. Old
+extensions retain the original server allowlist gate. Observer hooks in automatic
+mode are installed on demand after checking the page, never across every site at
+document start. Late navigation warnings withhold results without automatically
+replaying an action that already started.
 
 Allowing a website permits approved apps to read and take actions there, subject
 to configured tool permissions. This includes sending messages, deleting
@@ -125,10 +158,12 @@ Transport pairing may succeed while browser access remains blocked.
 
 This is session authorization for the extension, not isolation between approved
 apps. Approved apps still share permitted tabs and the existing browser policy.
-Website content access additionally requires a named Chrome host permission.
-The popup's Allow action requests Chrome permission before adding the server
-grant, and Remove revokes the host permission. Server flags, saved app approval
-and YOLO mode cannot supply the Chrome grant. Cookies and downloads also require
+Website content access additionally requires Chrome host permission: the explicit
+HTTP/HTTPS grant for automatic access, or individually named sites. In named-site
+mode, Allow requests Chrome permission before adding the server grant, and Remove
+revokes the host permission. In automatic mode, Block keeps a site inaccessible
+without removing the shared broad grant. Server flags, saved app approval and
+YOLO mode cannot supply the Chrome grant. Cookies and downloads also require
 their optional API permission. Debugger and proxy remain required permissions
 because Chrome does not support them as optional; debugger access is checked
 against website permission by the extension, rather than isolated by Chrome.

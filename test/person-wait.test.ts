@@ -17,6 +17,9 @@ const SITE = '[POLICY_DENIED] Please allow access to example.com: in Chrome, cli
 test('only approval and site refusals count as waiting on the person', () => {
   assert.equal(personStep(err(APPROVE)), APPROVE);
   assert.equal(personStep(err(SITE)), SITE);
+  const warning = '[POLICY_DENIED] Suspicious website example.test: A local rule matched. Review the warning, then click Allow.';
+  assert.equal(personStep(err(warning)), warning);
+  assert.equal(personStep(err('[POLICY_DENIED] Website access paused after the command started: Suspicious website example.test')), undefined);
   assert.equal(personStep(err('[TARGET_GONE] The extensions gallery cannot be scripted.')), undefined);
   assert.equal(personStep(err('[POLICY_DENIED] mutating tool "click" is disabled (safe-mode).')), undefined);
   assert.equal(personStep({ content: [{ type: 'text', text: SITE }] }), undefined);

@@ -144,7 +144,7 @@ async function waitFor(predicate: () => boolean, ms: number, label: string): Pro
 
 export async function startHarness(
   overrides: Partial<Policy> = {},
-  browserOptions: { deviceScaleFactor?: number; approveClient?: boolean; siteGrants?: boolean; browserPermissions?: boolean; legacyPermissions?: boolean; legacyProxy?: boolean } = {},
+  browserOptions: { deviceScaleFactor?: number; approveClient?: boolean; siteGrants?: boolean; browserPermissions?: boolean; legacyPermissions?: boolean; legacyProxy?: boolean; automaticPermission?: boolean } = {},
 ): Promise<Harness> {
   const page: Server = createServer(serve);
   await new Promise<void>((resolve) => page.listen(0, '127.0.0.1', resolve));
@@ -241,6 +241,7 @@ export async function startHarness(
   const admin = await ctx.newPage();
   await admin.goto('chrome://extensions');
   const fixtureOrigins = [...new Set(['127.0.0.1', 'localhost', ...policy.allowDomains].flatMap(siteOrigins))];
+  if (browserOptions.automaticPermission) fixtureOrigins.push('http://*/*', 'https://*/*');
   for (const host of fixtureOrigins) {
     await admin.evaluate(([id, host]) => {
       const c = (globalThis as unknown as { chrome: { developerPrivate: { addHostPermission(id: string, host: string): Promise<void> } } }).chrome;
@@ -248,6 +249,11 @@ export async function startHarness(
     }, [extensionId, host]);
   }
   await admin.close();
+  // Most regression cases intentionally exercise the retained named-site mode.
+  // Automatic-mode fixtures keep a fresh preference so they test its default.
+  if (!browserOptions.automaticPermission) {
+    await sw.evaluate(() => (globalThis as any).chrome.storage.local.set({ localSiteChecksV1: false }));
+  }
   await sw.evaluate(
     ([p, t]) =>
       (globalThis as unknown as { chrome: { storage: { local: { set(v: unknown): Promise<void> } } } }).chrome.storage.local.set({ wsPort: p, token: t }),

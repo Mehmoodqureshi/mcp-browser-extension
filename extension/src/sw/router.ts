@@ -18,7 +18,8 @@ import {
 } from '../../../shared/protocol';
 import { evaluatePolicy, isUrlGated, isDomainAllowed, hostOf } from '../../../shared/policy';
 import { ChromeExecutor, CmdError, HANDLED, observedTabUrl, resolveTab, urlForCommand } from './executor';
-import { requireSitePermission } from './browser-permissions';
+import { initializeBrowserPermissions, requireSitePermission } from './browser-permissions';
+import { requireSiteChecksReady, siteChecksEnabled } from './site-protection';
 
 export interface RouterDeps {
   exec: ChromeExecutor;
@@ -60,7 +61,7 @@ export class CommandRouter {
   async dispatch(cmd: CommandFrame, send = this.deps.send): Promise<void> {
     const record = this.deps.activity?.();
     // Health and approval probes carry no browser action and would swamp history.
-    const entry: ActivityEntry | null = cmd.method === 'ping_probe' ? null : {
+    const entry: ActivityEntry | null = cmd.method === 'ping_probe' || cmd.method === 'site_check' ? null : {
       id: crypto.randomUUID(), at: Date.now(), method: cmd.method, host: '', app: '', key: '', outcome: 'running',
     };
     let ran = false;
@@ -83,6 +84,7 @@ export class CommandRouter {
       // be permitted, so nothing runs. `ping_probe` is the one exemption — it
       // touches no page and no data, and the backend selector uses it to decide
       // whether this browser is alive at all.
+      await initializeBrowserPermissions();
       const policy = this.deps.getPolicy();
       if (!policy && cmd.method !== 'ping_probe') {
         throw new CmdError(
@@ -95,6 +97,20 @@ export class CommandRouter {
         if (entry) { entry.key = id; entry.app = name; }
       });
       const checkAccess = (): void => { checkStopped?.(); checkApproval(); };
+      if (cmd.method === 'site_check' || isUrlGated(cmd.method) || cmd.method === 'tab_new') requireSiteChecksReady();
+      if (cmd.method === 'site_check') {
+        const url = typeof cmd.params.url === 'string' ? cmd.params.url : '';
+        const verdict = evaluatePolicy(url, 'get_text', policy!);
+        if (!verdict.ok) {
+          if (hostOf(url)) this.deps.onBlocked?.(hostOf(url), 'get_text');
+          throw new CmdError('POLICY_DENIED', verdict.reason);
+        }
+        try { await requireSitePermission(url); }
+        catch (err) { if (hostOf(url)) this.deps.onBlocked?.(hostOf(url), 'get_text'); throw err; }
+        checkAccess();
+        send({ type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: { checked: true } });
+        return;
+      }
       if (cmd.method === 'ping_probe') {
         checkAccess();
         send({ type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data: {} });
@@ -141,7 +157,7 @@ export class CommandRouter {
           throw new CmdError('POLICY_DENIED', verdict.reason);
         }
         if (isUrlGated(cmd.method) && url !== 'about:blank') {
-          try { await requireSitePermission(url); }
+          try { await requireSitePermission(url, tab !== null && url === targetUrl ? tab : undefined); }
           catch (err) {
             const host = hostOf(url);
             if (host) this.deps.onBlocked?.(host, cmd.method);
@@ -168,6 +184,15 @@ export class CommandRouter {
         if (Number.isSafeInteger(id) && id >= 0) entry.tabId = id;
         if (opened?.url) entry.host = activityHost(opened.url) || entry.host;
       }
+      // A redirect or a newly loaded login page can introduce a warning after
+      // navigation. Withhold page results until that landing page is checked.
+      if (siteChecksEnabled() && ['tab_new', 'navigate', 'back', 'forward', 'reload'].includes(cmd.method)) {
+        const landedTab = cmd.method === 'tab_new' ? entry?.tabId : tab;
+        if (landedTab !== undefined && landedTab !== null) {
+          const landedUrl = (await chrome.tabs.get(landedTab)).url ?? '';
+          if (/^https?:\/\//i.test(landedUrl)) await requireSitePermission(landedUrl, landedTab);
+        }
+      }
       if (border) void this.markBorder(border, cmd, tab, data);
       const frame: ResultFrame = { type: 'result', v: PROTOCOL_VERSION, id: cmd.id, ok: true, data };
       // Ride the tab's landing URL home so the server's next gate needs no
@@ -185,7 +210,12 @@ export class CommandRouter {
       send(frame);
     } catch (err) {
       const code: ExecutorErrorCode = err instanceof CmdError ? err.code : 'CDP_ERROR';
-      const message = err instanceof Error ? err.message : String(err);
+      let message = err instanceof Error ? err.message : String(err);
+      // A late warning must not make the server replay a navigation or action
+      // that already ran while waiting for permission.
+      if (ran && message.startsWith('Suspicious website ')) {
+        message = `Website access paused after the command started: ${message} The page may already be open; use tabs_list after approval.`;
+      }
       if (entry) entry.outcome = ran && code === 'POLICY_DENIED' ? 'interrupted' : code === 'POLICY_DENIED' ? 'blocked' : 'failed';
       this.deps.log(`command "${cmd.method}" failed: ${message}`);
       const frame: ErrorFrame = {

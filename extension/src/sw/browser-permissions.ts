@@ -5,6 +5,7 @@ import {
 } from '../../../shared/browser-permissions';
 import { PROXY_STORAGE_KEY, parseProxyConfig } from '../../../shared/proxy';
 import { CmdError } from './cmd-error';
+import { checkLocalSite, keepAutomaticPermissions, refreshSiteChecks, requireSiteChecksReady } from './site-protection';
 
 let initialization: Promise<void> | undefined;
 
@@ -12,6 +13,7 @@ let initialization: Promise<void> | undefined;
 export function initializeBrowserPermissions(): Promise<void> {
   return initialization ??= (async () => {
     await removeGlobalOrigins();
+    await refreshSiteChecks();
     const saved = await chrome.storage.local.get([PERMISSIONS_MIGRATION_KEY, PROXY_STORAGE_KEY]);
     if (!saved[PERMISSIONS_MIGRATION_KEY]) {
       const permissions = ['cookies', 'downloads'];
@@ -24,6 +26,7 @@ export function initializeBrowserPermissions(): Promise<void> {
 }
 
 export async function removeGlobalOrigins(): Promise<void> {
+  if (await keepAutomaticPermissions()) return;
   const all = await chrome.permissions.getAll();
   const origins = (all.origins ?? []).filter(isGlobalOrigin);
   if (origins.length) await chrome.permissions.remove({ origins });
@@ -32,11 +35,15 @@ export async function removeGlobalOrigins(): Promise<void> {
 }
 
 /** Also used immediately before debugger access, which bypasses host permissions. */
-export async function requireSitePermission(url: string): Promise<void> {
+export async function requireSitePermission(url: string, tabId?: number, frameId = 0): Promise<void> {
   await initializeBrowserPermissions();
   if (url === 'about:blank') return;
+  requireSiteChecksReady();
   const origin = originForUrl(url);
-  if (origin && await chrome.permissions.contains({ origins: [origin] })) return;
+  if (origin && await chrome.permissions.contains({ origins: [origin] })) {
+    await checkLocalSite(url, tabId, frameId);
+    return;
+  }
   throw new CmdError('POLICY_DENIED', blockedDomainMessage(hostOf(url) || url));
 }
 

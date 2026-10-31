@@ -56,6 +56,8 @@ export const CLOSE_SUPERSEDED = 4000 as const;
  * every call. Without it, the server falls back to fetching the URL itself.
  */
 export const WIRE_CAP_TAB_URL = 'tab-url' as const;
+/** Signed local website checks, including the browser's automatic-access setting. */
+export const WIRE_CAP_SITE_CHECKS = 'site-checks-v1' as const;
 
 /**
  * `fill-form`: this extension handles the `fill_form` wire method — every field
@@ -172,7 +174,8 @@ export type WireMethod =
   | 'print_pdf'
   | 'fill_form'
   | 'proxy_status'
-  | 'ping_probe';
+  | 'ping_probe'
+  | 'site_check';
 
 /** Runtime list of every WireMethod, for boot-time drift assertions on both ends. */
 export const WIRE_METHODS: readonly WireMethod[] = [
@@ -207,6 +210,7 @@ export const WIRE_METHODS: readonly WireMethod[] = [
   'fill_form',
   'proxy_status',
   'ping_probe',
+  'site_check',
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -275,6 +279,9 @@ export interface HelloFrame extends BaseFrame {
  */
 export interface WirePolicy {
   allowDomains: string[];
+  /** Extension-local overlay only; server configuration cannot opt a browser in. */
+  automaticSites?: boolean;
+  blockedDomains?: string[];
   allowEval: boolean;
   allowDownloads: boolean;
   allowUploads: boolean;
@@ -293,6 +300,7 @@ export interface WirePolicy {
 
 export interface WelcomeFrame extends BaseFrame {
   type: 'welcome';
+  siteChecks?: boolean;
   serverVersion: string;
   sessionId: string;
   heartbeatMs: number;

@@ -1,0 +1,11 @@
+#site-protection h3 { font-size: 13px; margin: 18px 0 8px; }
+#site-protection .site-warning { display: block; padding: 12px 0; overflow-wrap: anywhere; }
+#site-protection .site-warning strong { display: block; font-size: 12px; }
+#site-protection .site-warning p { margin: 7px 0; }
+#site-protection .site-warning-actions { display: flex; gap: 8px; margin-top: 8px; }
+#site-protection .site-block-entry { display: flex; gap: 8px; margin-top: 10px; }
+#site-protection .site-block-entry input { width: 0; flex: 1; min-width: 0; }
+#site-protection .site-warning-actions button { flex-shrink: 0; }
+#site-protection ul { list-style: none; padding: 0; margin: 0; }
+#site-protection details { margin-top: 10px; }
+#site-protection summary { cursor: pointer; }

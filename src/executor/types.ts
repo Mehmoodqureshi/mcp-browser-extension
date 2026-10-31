@@ -278,6 +278,8 @@ export interface Executor {
    * gate should wait for one rather than fail. Optional: false when absent.
    */
   isOpeningTab?(tabId: TabId): boolean;
+  /** True only after the paired extension has authorised this URL; false for old extensions. */
+  checkSiteAccess?(url: string): Promise<boolean>;
 
   // --- tabs ---
   tabsList(): Promise<TabInfo[]>;

@@ -53,6 +53,13 @@ client (for example Claude Code or Claude Desktop).
 - Up to 100 dismissed website names in local storage, so a dismissed setup
   suggestion stays hidden. A new request for that site makes it visible again;
   dismissing a suggestion never grants access.
+- For local suspicious-site checks: the mode, manually blocked hosts,
+  up to 100 pending warning origins and reasons, and approved reason IDs per
+  origin. An origin contains scheme, hostname and port, never a URL path, query
+  or fragment. Checks inspect the address, page title and visible password-form
+  metadata locally; they never inspect field values or send this information to
+  a reputation service. Stored warnings contain rule-generated explanations,
+  not page text or passwords. Normal websites do not acquire stored approvals.
 
 ## One-click Connect
 
@@ -88,18 +95,24 @@ connections while the proxy is on.
   connects to is `127.0.0.1`.
 - It does not collect analytics, telemetry, or crash reports.
 - It does not run remote code. All code is in the package you install.
-- It does nothing until you pair it with a local server, and it acts only on
-  the domains that server's allowlist permits. The server ships deny-all by
-  default.
+- It does nothing until paired with a local server and an app is approved.
+  Website access also requires Chrome permission and the selected site policy.
 
 ## Which sites it can touch
 
-Website access requires both a matching entry in the server allowlist and a
+With automatic access off, website access requires both a matching entry in the server allowlist and a
 Chrome permission for that website. Click Allow in the toolbar popup or Settings
 to request both; accept Chrome's prompt if shown. Server flags alone do not
 grant Chrome permission. Remove also removes the corresponding Chrome host grant.
-The extension has no required host permissions and never requests all-site access.
-Upgrades remove inherited blanket host grants, so previously configured websites
+The extension has no required host permissions. Suspicious-site checks are on by
+default; **Allow website access** requests optional HTTP/HTTPS access after the
+person's click. Until then, websites stay inaccessible without entering a pending
+per-site list. With the Chrome grant accepted,
+ordinary sites can be read and acted on by approved apps without per-site Allow;
+local warnings pause access until reviewed. Checks can miss scams and flag
+legitimate sites. They do not prevent pages from loading and running scripts.
+Disabling this mode removes its broad host grant. Upgrades remove inherited
+blanket grants unless the person has enabled this mode, so previously configured websites
 may need your approval again. The extension refuses browser commands aimed at
 its own approval pages.
 

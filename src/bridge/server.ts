@@ -27,6 +27,7 @@ import {
   PROTOCOL_VERSION,
   STORE_EXTENSION_ID,
   STORE_EXTENSION_URL,
+  WIRE_CAP_SITE_CHECKS,
   type HelloFrame,
   type ServerFrame,
   type UnauthFrame,
@@ -68,6 +69,7 @@ export type ProfileNaming = 'options' | 'auto' | 'legacy';
 
 /** One paired browser, as reported by chrome_status. */
 export interface PairedProfile {
+  siteChecks?: boolean;
   /** Public, extension-generated replay scope; not a credential. */
   approvalChallenge?: string;
   name: string;
@@ -548,7 +550,7 @@ export class BridgeServer {
   /** Whether the browser paired as `profile` advertised capability `cap`. A peer
    *  cannot see the hub's handshake, so it answers false (the conservative path). */
   hasCap(profile: string | undefined, cap: string): boolean {
-    if (this.hub) return false;
+    if (this.hub) return cap === WIRE_CAP_SITE_CHECKS && this.hub.profiles.some((p) => p.name === routeKey(profile) && p.siteChecks === true);
     const conn = this.conns.get(routeKey(profile));
     return !!conn?.isOpen() && conn.hasCap(cap);
   }
@@ -659,6 +661,7 @@ export class BridgeServer {
       const o = this.origins.get(name);
       out.push({
         name,
+        ...(conn.hasCap(WIRE_CAP_SITE_CHECKS) ? { siteChecks: true } : {}),
         naming: o?.naming ?? 'legacy',
         ...(includeChallenge && conn.approvalChallenge ? { approvalChallenge: conn.approvalChallenge } : {}),
         ...(o?.extVersion ? { extVersion: o.extVersion } : {}),
@@ -959,6 +962,7 @@ export class BridgeServer {
       type: 'welcome',
       v: PROTOCOL_VERSION,
       serverVersion: this.opts.serverVersion,
+      siteChecks: this.grants !== null,
       sessionId,
       heartbeatMs: this.heartbeatMs,
       policy: this.policy,

@@ -32,7 +32,8 @@ async function applyObserverScript(policy: WirePolicy | null, log: (m: string) =
     const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] }).catch(() => []);
     // Chrome does not consider two separate HTTP/HTTPS grants to contain one
     // wildcard-scheme pattern. Register the concrete granted schemes instead.
-    const candidates = (policy ? observerMatches(policy) : []).flatMap((pattern) =>
+    // Automatic sites are checked on demand, before the executor installs a hook.
+    const candidates = (policy && !policy.automaticSites ? observerMatches(policy) : []).flatMap((pattern) =>
       pattern.startsWith('*://') ? [`http${pattern.slice(1)}`, `https${pattern.slice(1)}`] : [pattern]);
     const checks = await Promise.all(candidates.map(async (pattern) =>
       await chrome.permissions.contains({ origins: [pattern] }) ? pattern : null));

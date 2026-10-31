@@ -1,4 +1,6 @@
 import '../client-connections';
+import '../site-protection-ui';
+import { SITE_CHECKS_KEY } from '../../../shared/site-risk';
 import './access-lists';
 import '../activity-dashboard';
 import { ACCESS_STOPPED_KEY } from '../../../shared/activity';
@@ -99,6 +101,8 @@ async function render(): Promise<void> {
   const generation = ++renderGeneration;
   const s = await chrome.storage.local.get([
     'connState',
+    SITE_CHECKS_KEY,
+    'siteChecksSupported',
     'pairedProfile',
     'allowedSites',
     'grantedSites',
@@ -111,6 +115,7 @@ async function render(): Promise<void> {
   const state = s[ACCESS_STOPPED_KEY] !== undefined && s[ACCESS_STOPPED_KEY] !== false
     ? 'stopped' : typeof s.connState === 'string' ? s.connState : 'idle';
   const connected = state === 'connected';
+  const automatic = s[SITE_CHECKS_KEY] !== false && s.siteChecksSupported === true;
   const allowed = Array.isArray(s.allowedSites) ? (s.allowedSites as string[]).map(normalizeDomainPattern).filter(Boolean) : [];
   // null = a server too old for grants, or one run with --no-site-grants.
   const granted = Array.isArray(s.grantedSites) ? (s.grantedSites as string[]) : null;
@@ -166,9 +171,9 @@ async function render(): Promise<void> {
     const name = host.replace(/^www\./, '');
     avatar.textContent = name.charAt(0);
     avatar.style.background = hue(name);
-    $('site-state').textContent = ok ? '● Agent can use this site' : '● Blocked for the agent';
+    $('site-state').textContent = automatic ? 'Checked before access' : ok ? '● Agent can use this site' : '● Blocked for the agent';
     $('site-state').className = `chip ${ok ? 'ok' : 'warn'}`;
-    $('site-allow').hidden = ok || !canGrant;
+    $('site-allow').hidden = automatic || ok || !canGrant;
     $('site-allow').onclick = (event) => {
       if (event.isTrusted) void busyButton($('site-allow') as HTMLButtonElement, () => grant(host, true));
     };
@@ -181,14 +186,14 @@ async function render(): Promise<void> {
         button('Allow', () => grant(host, true), 'primary'),
       ]),
   );
-  $('blocked-section').hidden = !canGrant || blocked.length === 0;
+  $('blocked-section').hidden = automatic || !canGrant || blocked.length === 0;
   $('blocked-count').textContent = String(blocked.length);
 
   // -- allowed sites --
   renderList($('allowed'), permitted, (host) => host, (host) => JSON.stringify([host, granted?.includes(host)]), (h) =>
       row(h, [...(granted?.includes(h) ? [] : [tag('From setup')]), button('Remove', () => grant(h, false), 'ghost')]),
   );
-  $('allowed-section').hidden = !connected;
+  $('allowed-section').hidden = automatic || !connected;
   $('allowed-count').textContent = String(permitted.length);
   $('allowed-note').textContent = connected && permitted.length === 0 ? 'No sites allowed yet. Click Allow above to give Chrome permission for a website.' : '';
 
@@ -252,7 +257,7 @@ $('connect').addEventListener('click', async (event) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local') return;
-  if (changes[ACCESS_STOPPED_KEY] || changes.connState || changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.pairedProfile || changes.latestExtension) {
+  if (changes[SITE_CHECKS_KEY] || changes.siteChecksSupported || changes[ACCESS_STOPPED_KEY] || changes.connState || changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.pairedProfile || changes.latestExtension) {
     void render();
   }
 });

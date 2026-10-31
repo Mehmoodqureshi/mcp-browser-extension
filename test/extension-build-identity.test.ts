@@ -16,7 +16,10 @@ test('the actual extension build preserves legacy IDs and gives fresh builds the
     symlinkSync(join(process.cwd(), 'node_modules'), join(dir, 'node_modules'), 'junction');
     mkdirSync(join(dir, 'extension-dist'));
     const manifestPath = join(dir, 'extension-dist/manifest.json');
-    const build = () => execFileSync(process.execPath, [join(dir, 'extension/scripts/build-ext.mjs')], { cwd: dir, stdio: 'pipe' });
+    // This fixture tests the default output path, independent of an isolated
+    // output directory used by the surrounding full suite.
+    const { MBE_EXTENSION_BUILD_DIR: _isolatedBuild, ...env } = process.env;
+    const build = () => execFileSync(process.execPath, [join(dir, 'extension/scripts/build-ext.mjs')], { cwd: dir, stdio: 'pipe', env });
     writeFileSync(manifestPath, JSON.stringify({ manifest_version: 3, name: 'legacy', version: '0.0.1' }));
     const pairingPath = join(dir, 'extension-dist/pairing.json');
     writeFileSync(pairingPath, '{"profile":"keep-local-pairing"}');

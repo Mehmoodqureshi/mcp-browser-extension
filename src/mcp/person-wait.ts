@@ -37,13 +37,14 @@ export function notifyPersonStep(): void {
 
 const APPROVAL = /Please approve "/;
 const SITE = /^\[POLICY_DENIED\] Please allow access to /;
+const SITE_WARNING = /^\[POLICY_DENIED\] (Suspicious website |Automatic website access needs Chrome permission\.)/;
 
 /** The person-only step a result is blocked on, or undefined when it is not. */
 export function personStep(result: CallToolResult): string | undefined {
   if (!result.isError) return undefined;
   const first = result.content[0];
   const text = first?.type === 'text' ? first.text : '';
-  return APPROVAL.test(text) || SITE.test(text) ? text : undefined;
+  return APPROVAL.test(text) || SITE.test(text) || SITE_WARNING.test(text) ? text : undefined;
 }
 
 export const STILL_WAITING =

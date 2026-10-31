@@ -1,4 +1,6 @@
 import '../client-connections';
+import '../site-protection-ui';
+import { SITE_CHECKS_KEY } from '../../../shared/site-risk';
 import '../activity-dashboard';
 import { ACCESS_STOPPED_KEY } from '../../../shared/activity';
 import '../extra-permissions';
@@ -165,13 +167,16 @@ function tag(text: string): HTMLSpanElement {
 let sitesGeneration = 0;
 async function renderSites(): Promise<void> {
   const generation = ++sitesGeneration;
-  const { allowedSites, grantedSites, blockedSites, dismissedSites, connState } = await chrome.storage.local.get([
+  const { allowedSites, grantedSites, blockedSites, dismissedSites, connState, siteChecksSupported, [SITE_CHECKS_KEY]: selected } = await chrome.storage.local.get([
+    SITE_CHECKS_KEY,
+    'siteChecksSupported',
     'allowedSites',
     'grantedSites',
     'blockedSites',
     'dismissedSites',
     'connState',
   ]);
+  const automatic = selected !== false && siteChecksSupported === true;
   const allowed = Array.isArray(allowedSites) ? (allowedSites as string[]).map(normalizeDomainPattern).filter(Boolean) : [];
   // null = a server too old to take grants from here.
   const granted = Array.isArray(grantedSites) ? (grantedSites as string[]) : null;
@@ -188,7 +193,8 @@ async function renderSites(): Promise<void> {
         button('Dismiss', () => chrome.runtime.sendMessage({ type: 'dismiss_blocked', host })),
       ]),
   );
-  blockedWrapEl.hidden = blocked.length === 0 || connState !== 'connected';
+  blockedWrapEl.hidden = !!automatic || blocked.length === 0 || connState !== 'connected';
+  document.getElementById('sites-section')!.hidden = !!automatic;
 
   renderList(allowedEl, permitted, (host) => host, (host) => JSON.stringify([host, granted?.includes(host)]), (host) =>
       siteRow(host, [...(granted?.includes(host) ? [] : [tag('set by server flags')]), button('Remove', () => grant(host, false))]),
@@ -226,7 +232,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (area === 'local' && changes.connState) render(String(changes.connState.newValue));
   if (area === 'local' && changes.pairedProfile) renderPairedAs(changes.pairedProfile.newValue);
-  if (area === 'local' && (changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.connState)) {
+  if (area === 'local' && (changes[SITE_CHECKS_KEY] || changes.siteChecksSupported || changes.allowedSites || changes.grantedSites || changes.blockedSites || changes.dismissedSites || changes.connState)) {
     void renderSites();
   }
 });
