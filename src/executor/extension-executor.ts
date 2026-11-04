@@ -39,7 +39,7 @@ import {
   type WaitResult,
   type WaitUntil,
 } from './types';
-import { WIRE_CAP_FILL_FORM, WIRE_CAP_SITE_CHECKS, fillFormTimeoutMs, type FillFormWireResult, type ProxyWireStatus } from '../../shared/protocol';
+import { WIRE_CAP_FILL_FORM, WIRE_CAP_SITE_CHECKS, fillFormTimeoutMs, drawTimeoutMs, type FillFormWireResult, type ProxyWireStatus } from '../../shared/protocol';
 import type { BridgeServer } from '../bridge/server';
 import { mapWireErrorCode } from '../bridge/connection';
 import { captureDownload, peekActiveWorkspace } from '../bridge/workspace';
@@ -206,7 +206,8 @@ export class ExtensionExecutor implements Executor {
     return (await this.send('click', { ...targetParams(t), ...frameParams(opts), button: opts?.button, clickCount: opts?.clickCount, trusted: opts?.trusted }, { tabId: opts?.tabId })) as ActionOk;
   }
   async draw(strokes: import('../../shared/protocol').DrawStroke[], opts?: { tabId?: TabId }): Promise<{ ok: true; strokes: number; points: number }> {
-    return (await this.send('draw', { strokes }, { tabId: opts?.tabId })) as { ok: true; strokes: number; points: number };
+    const points = strokes.reduce((sum, stroke) => sum + stroke.points.length, 0);
+    return (await this.send('draw', { strokes }, { tabId: opts?.tabId, timeoutMs: drawTimeoutMs(points, strokes.length) })) as { ok: true; strokes: number; points: number };
   }
   async type(
     t: Target,

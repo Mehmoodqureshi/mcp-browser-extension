@@ -4,6 +4,7 @@ import {
 } from '../../../shared/client-auth';
 import { PROTOCOL_VERSION, type CommandFrame } from '../../../shared/protocol';
 import { CmdError } from './cmd-error';
+import { PHONE_ACCESS_MS, type PhoneDevice } from '../../../shared/phone-pairing';
 
 const MAX_CLIENTS = 64;
 const MAX_NONCES = 4096;
@@ -145,6 +146,26 @@ export class ClientApprovals {
         this.storageFault = true;
         throw err;
       }
+    });
+  }
+
+  /** A human approved a scanned phone in our own popup. Validate its local helper identity. */
+  approvePairedPhone(phone: PhoneDevice): Promise<void> {
+    return this.serial(async () => {
+      await this.load();
+      if (phone.state !== 'pending' || phone.expiresAt <= this.now() || phone.name !== clientName(phone.name)) {
+        return denied('This phone request expired. Generate a new QR code.');
+      }
+      const der = decode(phone.publicKey);
+      await crypto.subtle.importKey('spki', der, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      const id = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', der)), (b) => b.toString(16).padStart(2, '0')).join('');
+      if (id !== phone.clientId) return denied('Phone identity is invalid.');
+      const clients = this.clients.filter((c) => c.id !== id && c.expiresAt > this.now());
+      if (clients.length >= MAX_CLIENTS) return denied('Remove an unused app connection before pairing a phone.');
+      await this.save([...clients, { id, publicKey: phone.publicKey, name: phone.name, kind: 'phone', phoneId: phone.id,
+        state: 'approved', requestedAt: this.now(), expiresAt: this.now() + PHONE_ACCESS_MS }]);
+      this.storageFault = false;
+      this.revoking.delete(id);
     });
   }
 

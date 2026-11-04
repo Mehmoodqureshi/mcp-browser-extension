@@ -89,6 +89,32 @@ test('readAsMarkdown reduces the page HTML', async () => {
   assert.match(md, /\[Example\]\(https:\/\/example\.com\)/);
 });
 
+test('oversized HTML uses visible text for the same target and frame, including through an older shared bridge', async () => {
+  for (const code of ['RESULT_TOO_LARGE', 'TARGET_GONE'] as const) {
+    const ex = new StubExecutor();
+    ex.getHtml = async () => { throw new ExecutorError(code, '[RESULT_TOO_LARGE] The result exceeded the bridge limit.'); };
+    const calls: unknown[] = [];
+    ex.getText = async (...args: unknown[]) => { calls.push(args); return { text: 'The complete visible article' }; };
+    const result = await readAsMarkdown(ex, { selector: 'article', tabId: 'tab', frameId: 2 });
+    assert.match(result, /Text-only view/);
+    assert.match(result, /The complete visible article/);
+    assert.deepEqual(calls, [[{ selector: 'article' }, { tabId: 'tab', frameId: 2, allFrames: undefined }]]);
+    ex.getText = async () => { throw new ExecutorError('RESULT_TOO_LARGE', 'Text is also too large'); };
+    await assert.rejects(readAsMarkdown(ex, {}), /Text is also too large/);
+  }
+});
+
+test('page reading never retries permission failures or unrelated missing targets as text', async () => {
+  const ex = new StubExecutor();
+  let reads = 0;
+  ex.getText = async () => { reads++; return { text: 'Should not run' }; };
+  for (const code of ['POLICY_DENIED', 'TARGET_GONE', 'EXTENSION_DISCONNECTED'] as const) {
+    ex.getHtml = async () => { throw new ExecutorError(code, 'Original failure'); };
+    await assert.rejects(readAsMarkdown(ex, {}), /Original failure/);
+  }
+  assert.equal(reads, 0);
+});
+
 test('fillForm fills each field then clicks submit', async () => {
   const calls: string[] = [];
   const fake = {

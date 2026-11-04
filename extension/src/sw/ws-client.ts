@@ -10,6 +10,7 @@ import { CLIENT_APPROVAL_CAP } from '../../../shared/client-auth';
 
 import {
   CLOSE_SUPERSEDED,
+  MAX_BRIDGE_FRAME_BYTES,
   PROTOCOL_VERSION,
   WIRE_CAP_FILL_FORM,
   WIRE_CAP_PROXY,
@@ -127,7 +128,15 @@ export class WsClient {
               // A command that finishes after reconnect must never send its
               // page data to the new socket, whose request ids may overlap.
               if (this.ws === ws && this.state === 'connected' && ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify(result));
+                const payload = JSON.stringify(result);
+                // Large HTML, images and evaluation results must fail only the
+                // request, not close the shared browser connection (WS 1009).
+                // Count encoded bytes, including JSON escaping and framing.
+                if (new TextEncoder().encode(payload).byteLength > MAX_BRIDGE_FRAME_BYTES) {
+                  const error: ErrorFrame = { type: 'error', v: PROTOCOL_VERSION, id: frame.id, ok: false,
+                    error: { code: 'RESULT_TOO_LARGE', message: '[RESULT_TOO_LARGE] The browser result is too large to return. Request a smaller page section or a lower-resolution image.' } };
+                  ws.send(JSON.stringify(error));
+                } else ws.send(payload);
               }
             });
           }

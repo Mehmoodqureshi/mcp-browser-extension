@@ -51,7 +51,7 @@ async function render(): Promise<void> {
   if (generation !== renderGeneration) return;
   const saved = state[CLIENT_STORAGE_KEY];
   const stopped = state[ACCESS_STOPPED_KEY] !== undefined && state[ACCESS_STOPPED_KEY] !== false;
-  const clients: ClientConnection[] = Array.isArray(saved) ? saved : [];
+  const clients: ClientConnection[] = Array.isArray(saved) ? saved.filter((c: ClientConnection) => c.kind !== 'phone') : [];
   const now = Date.now();
   const pending = (client: ClientConnection): boolean => client.state === 'pending' && client.expiresAt > now;
   const waiting = clients.filter(pending).length;

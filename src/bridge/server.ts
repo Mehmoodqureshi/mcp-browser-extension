@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   BRIDGE_HOST,
+  MAX_BRIDGE_FRAME_BYTES,
   CLOSE_SUPERSEDED,
   CLOSE_UNAUTHORIZED,
   PROTOCOL_VERSION,
@@ -127,8 +128,6 @@ const MAX_PREAUTH_FRAMES = 10;
 const PORT_WAIT_MS = 4_000;
 /** Pause between port-bind retries while waiting for the old listener to exit. */
 const PORT_RETRY_MS = 250;
-/** Bridge frames are small JSON control messages; cap unauthenticated memory use. */
-const MAX_BRIDGE_FRAME_BYTES = 4 * 1024 * 1024;
 
 /** Native clients omit Origin; Chrome extensions use their own isolated origin. */
 function allowBridgeOrigin(origin: string | undefined): boolean {
@@ -494,6 +493,11 @@ export class BridgeServer {
     opts?: { tabId?: string; timeoutMs?: number; profile?: string },
   ): Promise<unknown> {
     const profile = routeKey(opts?.profile);
+    const identity = currentClientIdentity();
+    identity?.assertAccess?.();
+    if (identity?.profile && identity.profile !== profile) {
+      throw new ExecutorError('POLICY_DENIED', 'This phone is paired with a different browser profile.');
+    }
     const timeoutMs = opts?.timeoutMs ?? defaultTimeoutFor(method);
     const intent = { v: PROTOCOL_VERSION, method, params, tabId: opts?.tabId, timeoutMs };
     const challenge = this.hub
@@ -531,12 +535,25 @@ export class BridgeServer {
   private async forwardCommand(
     method: WireMethod, params: Record<string, unknown>,
     opts?: { tabId?: string; timeoutMs?: number; profile?: string; authorization?: ClientProof },
+    peerPid?: number,
   ): Promise<unknown> {
     const profile = routeKey(opts?.profile);
     const conn = this.conns.get(profile);
     if (!conn?.isOpen()) throw new ExecutorError('EXTENSION_DISCONNECTED', this.noPairMessage(profile));
-    if (!isHealthProbe({ method, params }) && (!conn.hasCap(CLIENT_APPROVAL_CAP) || !opts?.authorization)) {
-      throw new ExecutorError('POLICY_DENIED', 'Signed client authorization and an updated extension are required.');
+    if (!isHealthProbe({ method, params })) {
+      if (!conn.hasCap(CLIENT_APPROVAL_CAP)) {
+        throw new ExecutorError('POLICY_DENIED',
+          `Signed client authorization and an updated extension are required. The browser paired as "${profile}" ` +
+          'runs an extension too old to check app approvals: update MCP Browser Extension from the Chrome Web Store ' +
+          '(or click Reload on it in chrome://extensions), then retry.');
+      }
+      if (!opts?.authorization) {
+        throw new ExecutorError('POLICY_DENIED',
+          `Signed client authorization is missing: ${peerPid === undefined ? 'an AI app on this computer' : `an AI app on this computer (process ${peerPid})`} ` +
+          'is running an MCP Browser Extension server older than 0.9.32, which cannot sign browser commands. ' +
+          'In that app\'s MCP settings start "npx -y mcp-browser-extension@latest" (remove any pinned older version), ' +
+          'then fully quit and reopen the app.');
+      }
     }
     // A peer signs with the challenge it last heard about. If this browser has
     // reconnected since, Chrome would refuse the proof as stale: say so instead,
@@ -852,14 +869,14 @@ export class BridgeServer {
     this.log(`mcp-browser-extension pid ${pid ?? '?'} joined as a peer (${this.peers.size} sharing these browsers)`);
     this.sendPeer(ws, { type: 'peer_welcome', hubPid: process.pid });
     this.sendPeer(ws, { type: 'peer_state', profiles: this.pairedProfiles(true) });
-    ws.on('message', (raw) => this.handlePeerFrame(ws, raw.toString()));
+    ws.on('message', (raw) => this.handlePeerFrame(ws, raw.toString(), pid));
     ws.on('close', () => this.peers.delete(ws));
     ws.on('error', () => {
       /* the close that follows cleans up */
     });
   }
 
-  private handlePeerFrame(ws: WebSocket, raw: string): void {
+  private handlePeerFrame(ws: WebSocket, raw: string, pid?: number): void {
     let frame: PeerToHubFrame;
     try {
       frame = JSON.parse(raw) as PeerToHubFrame;
@@ -872,10 +889,10 @@ export class BridgeServer {
         (err) => this.sendPeer(ws, relayError(id, err)),
       );
     };
-    if (frame.type === 'relay') answer(frame.id, this.forwardCommand(frame.method, frame.params ?? {}, frame.opts));
+    if (frame.type === 'relay') answer(frame.id, this.forwardCommand(frame.method, frame.params ?? {}, frame.opts, pid));
     else if (frame.type === 'peer_rename') answer(frame.id, this.forwardCommand(
       'ping_probe', { requireClientApproval: true, renameProfile: { from: frame.from, to: frame.to } },
-      { profile: frame.from, timeoutMs: defaultTimeoutFor('ping_probe'), authorization: frame.authorization },
+      { profile: frame.from, timeoutMs: defaultTimeoutFor('ping_probe'), authorization: frame.authorization }, pid,
     ).then(() => this.renameApprovedProfile(frame.from, frame.to)));
     else if (frame.type === 'peer_blocked' && typeof frame.host === 'string') this.noteBlocked(frame.host, String(frame.method ?? ''));
   }

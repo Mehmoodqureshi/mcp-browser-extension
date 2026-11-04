@@ -399,6 +399,7 @@ export interface Executor {
  * codes describe failures on the server half (no backend, launch failed, etc.).
  */
 export type ExecutorErrorCodeLocal =
+  | 'RESULT_TOO_LARGE'
   | 'NO_BACKEND'
   | 'EXTENSION_DISCONNECTED'
   | 'TIMEOUT'

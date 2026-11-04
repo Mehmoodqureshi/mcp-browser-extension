@@ -6,12 +6,14 @@ import { webcrypto, randomUUID } from 'node:crypto';
 import { createClientIdentity, withClientIdentity, currentClientIdentity } from '../src/bridge/client-identity';
 import { CLIENT_CLOCK_SKEW_MS, CLIENT_GRANT_MS, CLIENT_REQUEST_MS, type ClientConnection } from '../shared/client-auth';
 import { PROTOCOL_VERSION, type CommandFrame } from '../shared/protocol';
+import { PHONE_ACCESS_MS, type PhoneDevice } from '../shared/phone-pairing';
 
 const source = buildSync({ entryPoints: ['extension/src/sw/client-approvals.ts'], bundle: true, write: false, platform: 'browser', format: 'cjs' }).outputFiles[0].text;
 interface Gate {
   authorize(cmd: CommandFrame): Promise<() => void>;
   decide(id: string, allow: boolean): Promise<void>;
   revokeAll(): Promise<void>;
+  approvePairedPhone(phone: PhoneDevice): Promise<void>;
 }
 function fixture(saved?: ClientConnection[]) {
   const module = { exports: {} as { ClientApprovals: new (deps: unknown) => Gate; isApprovalPage: (sender: unknown) => boolean } };
@@ -40,6 +42,22 @@ async function approve(f: ReturnType<typeof fixture>, who = f.identity): Promise
   await assert.rejects(f.gate.authorize(f.command(who)), /Please approve/);
   await f.gate.decide(who.id, true);
 }
+
+test('a phone grant validates its key, lasts 30 days, and is removed by Stop access', async () => {
+  const f = fixture();
+  const phone: PhoneDevice = { id: randomUUID(), name: 'Test app 1.0', clientId: f.identity.id,
+    publicKey: f.identity.publicKey, requestedAt: Date.now(), expiresAt: Date.now() + 120_000,
+    state: 'pending', confirmation: '123456' };
+  await assert.rejects(f.gate.approvePairedPhone({ ...phone, clientId: '0'.repeat(64) }), /identity is invalid/);
+  await assert.rejects(f.gate.approvePairedPhone({ ...phone, expiresAt: 1 }), /expired/);
+  await f.gate.approvePairedPhone(phone);
+  assert.equal(f.records()?.[0].kind, 'phone');
+  assert.equal(f.records()?.[0].phoneId, phone.id);
+  assert.equal(f.records()?.[0].expiresAt! - f.records()?.[0].requestedAt!, PHONE_ACCESS_MS);
+  (await f.gate.authorize(f.command()))();
+  await f.gate.revokeAll();
+  await assert.rejects(f.gate.authorize(f.command()), /revoked/);
+});
 
 test('a valid key requests Chrome approval; separate keys remain separate', async () => {
   const f = fixture();
@@ -145,6 +163,9 @@ test('identities rejected at the client cap cannot occupy replay slots for appro
   const f = fixture();
   await approve(f);
   f.advance(CLIENT_CLOCK_SKEW_MS + 1); // expire the approved app's old replay entry
+  // Signing uses the wall clock while this fixture's clock is fixed. Keep the
+  // next proof inside the inclusive skew window even on sub-millisecond runs.
+  await new Promise((resolve) => setTimeout(resolve, 5));
   for (let i = 0; i < 64; i++) {
     const unknown = createClientIdentity(() => `Unknown ${i}`);
     await assert.rejects(f.gate.authorize(f.command(unknown)), i < 63 ? /Please approve/ : /Too many client connections/);

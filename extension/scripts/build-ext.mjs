@@ -60,6 +60,11 @@ copyFileSync(join(extRoot, 'src/popup/popup.html'), join(outDir, 'popup.html'));
 copyFileSync(join(extRoot, 'src/brand.css'), join(outDir, 'brand.css'));
 copyFileSync(join(extRoot, 'src/activity-dashboard.css'), join(outDir, 'activity-dashboard.css'));
 copyFileSync(join(extRoot, 'src/site-protection.css'), join(outDir, 'site-protection.css'));
+// The popup bundles these libraries. Preserve their notices in unpacked and
+// Store builds even though executable bundles omit comments.
+writeFileSync(join(outDir, 'THIRD-PARTY-NOTICES.txt'), [
+  ['qrcode', 'license'], ['dijkstrajs', 'LICENSE.md'],
+].map(([name, file]) => `${name}\n\n${readFileSync(join(repoRoot, 'node_modules', name, file), 'utf8')}`).join('\n\n'));
 // Icons sit flat in the root: the home-folder mirror copies top-level files only.
 for (const f of readdirSync(join(extRoot, 'icons'))) {
   if (f.endsWith('.png')) copyFileSync(join(extRoot, 'icons', f), join(outDir, f));

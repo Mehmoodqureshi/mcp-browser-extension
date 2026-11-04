@@ -13,6 +13,7 @@
  */
 
 import {
+  drawTimeoutMs,
   type CommandFrame,
   type FillFieldOp,
   type WireMethod,
@@ -531,6 +532,7 @@ async function withDebugger<T>(
   tabId: number,
   fn: (target: chrome.debugger.Debuggee) => Promise<T>,
   timeoutMs = DEBUGGER_OP_MS,
+  retryDetached = true,
 ): Promise<T> {
   return locks.run(`dbg:${tabId}`, async () => {
     const target: chrome.debugger.Debuggee = { tabId };
@@ -543,7 +545,7 @@ async function withDebugger<T>(
       return await withDeadline(tabId, once(), timeoutMs);
     } catch (err) {
       if (err instanceof CmdError && err.code === 'TIMEOUT') throw err;
-      if (!DETACHED_RE.test(String((err as Error)?.message ?? err))) throw err;
+      if (!retryDetached || !DETACHED_RE.test(String((err as Error)?.message ?? err))) throw err;
       forgetDebugger(tabId);
       return await withDeadline(tabId, once(), timeoutMs);
     } finally {
@@ -962,7 +964,9 @@ export class ChromeExecutor {
       case 'tab_select': {
         const id = parseTabId(String(cmd.tabId));
         const t = await chrome.tabs.update(id, { active: true });
-        return tabInfo(t ?? (await chrome.tabs.get(id)));
+        const selected = t ?? (await chrome.tabs.get(id));
+        await chrome.windows.update(selected.windowId, { focused: true });
+        return tabInfo(selected);
       }
       case 'tab_new': {
         const url = typeof cmd.params.url === 'string' ? cmd.params.url : undefined;
@@ -1216,26 +1220,41 @@ export class ChromeExecutor {
         });
         const pointCount = strokes.reduce((sum, stroke) => sum + stroke.length, 0);
         if (pointCount > 5000) throw new CmdError('BAD_ARGS', 'draw is limited to 5000 total points per call');
-        await withDebugger(id, async (t) => {
+        // Healthy input events can collectively take longer than 20 seconds.
+        // Honor an older caller's shorter deadline and leave time for the reply.
+        const budget = Math.max(1, Math.min(drawTimeoutMs(pointCount, strokes.length), cmd.timeoutMs) - 1000);
+        const deadline = Date.now() + budget;
+        let completed = 0;
+        try { await withDebugger(id, async (t) => {
+          const sendMouse = async (params: Record<string, unknown>): Promise<void> => {
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) throw new CmdError('TIMEOUT', 'Drawing ran out of time');
+            await withDeadline(id, chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', params), Math.min(DEBUGGER_OP_MS, remaining));
+          };
           for (const stroke of strokes) {
             const first = stroke[0];
-            await chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', {
+            await sendMouse({
               type: 'mouseMoved', x: first.x, y: first.y, buttons: 0,
             });
-            await chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', {
+            await sendMouse({
               type: 'mousePressed', x: first.x, y: first.y, button: 'left', buttons: 1, clickCount: 1,
             });
             for (const point of stroke.slice(1)) {
-              await chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', {
+              await sendMouse({
                 type: 'mouseMoved', x: point.x, y: point.y, button: 'left', buttons: 1,
               });
             }
             const last = stroke[stroke.length - 1];
-            await chrome.debugger.sendCommand(t, 'Input.dispatchMouseEvent', {
+            await sendMouse({
               type: 'mouseReleased', x: last.x, y: last.y, button: 'left', buttons: 0, clickCount: 1,
             });
+            completed++;
           }
-        });
+        }, budget, false); } catch (err) {
+          // Never replay a partially drawn canvas after debugger detachment.
+          const code = err instanceof CmdError ? err.code : 'CDP_ERROR';
+          throw new CmdError(code, `Drawing interrupted after ${completed} of ${strokes.length} complete strokes. Some marks may already be visible; inspect the canvas before continuing. ${err instanceof Error ? err.message : 'Browser input failed.'}`);
+        }
         return { ok: true, strokes: strokes.length, points: pointCount };
       }
       case 'type': {

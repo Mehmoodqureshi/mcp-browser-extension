@@ -22,6 +22,9 @@ import { createServer } from '../mcp/server';
 import { requireAccess } from '../access';
 import type { Policy } from '../security/policy';
 import { keyMatches } from './key';
+import type { PhonePairing } from './phone-pairing';
+import { ChatRequestError, createCodexChatRunner, PhoneChat } from './phone-chat';
+import { createClaudeChatRunner } from './claude-chat';
 
 /** Largest JSON-RPC body accepted; tool calls are small, uploads go by path. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -34,6 +37,9 @@ export interface HttpMcpOptions {
   log: (message: string) => void;
   /** Test seam; production callers use the Firebase-backed gate by default. */
   accessGuard?: typeof requireAccess;
+  phonePairing?: PhonePairing;
+  /** Personal, opt-in local Codex or Claude companion. Never runs on the relay host. */
+  phoneChat?: boolean | PhoneChat;
 }
 
 export interface HttpMcp {
@@ -47,7 +53,9 @@ export interface HttpMcp {
 export function presentedKey(req: Pick<IncomingMessage, 'url' | 'headers'>): string | undefined {
   const path = (req.url ?? '').split('?')[0];
   const inPath = /^\/mcp\/([^/]+)\/?$/.exec(path);
-  if (inPath) return decodeURIComponent(inPath[1]);
+  if (inPath) {
+    try { return decodeURIComponent(inPath[1]); } catch { return undefined; }
+  }
   if (path === '/mcp' || path === '/mcp/') {
     const auth = req.headers.authorization;
     const bearer = typeof auth === 'string' ? /^Bearer\s+(\S+)$/i.exec(auth) : null;
@@ -56,13 +64,13 @@ export function presentedKey(req: Pick<IncomingMessage, 'url' | 'headers'>): str
   return undefined;
 }
 
-function readJson(req: IncomingMessage): Promise<unknown> {
+function readJson(req: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => {
       size += c.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         reject(new Error('body too large'));
         req.destroy();
         return;
@@ -92,12 +100,73 @@ function rpcError(res: ServerResponse, status: number, message: string): void {
 
 export async function startHttpMcp(opts: HttpMcpOptions): Promise<HttpMcp> {
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const principals = new Map<string, string>();
+  const chats = opts.phoneChat instanceof PhoneChat ? opts.phoneChat : opts.phoneChat && opts.phonePairing
+    ? new PhoneChat((id, agent) => (agent === 'claude' ? createClaudeChatRunner : createCodexChatRunner)(opts.phonePairing!, id, opts.version, opts.policy, opts.accessGuard),
+      (id) => opts.phonePairing!.identity(id).assertAccess?.()) : undefined;
+  const removeListener = opts.phonePairing?.onRemove((id) => {
+    chats?.remove(id);
+    for (const [session, principal] of principals) {
+      if (principal !== id) continue;
+      const transport = transports.get(session);
+      transports.delete(session);
+      principals.delete(session);
+      void transport?.close().catch(() => undefined);
+    }
+  });
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (!keyMatches(presentedKey(req), opts.key)) return reply(res, 404);
+    res.setHeader('cache-control', 'no-store');
+    const path = (req.url ?? '').split('?')[0];
+    if (opts.phonePairing && path === '/pair/chat') {
+      if (req.headers.origin || req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) return reply(res, 404);
+      const secret = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
+      const phone = opts.phonePairing.authenticate(secret);
+      if (!phone) return reply(res, 404);
+      if (!chats) return reply(res, 409, { error: 'Chat is not enabled on this computer yet.' });
+      let body: unknown;
+      try { body = await readJson(req, 40_000); } catch { return reply(res, 400, { error: 'The chat request is invalid.' }); }
+      // Revocation may have happened while the body was arriving.
+      if (!opts.phonePairing.authenticate(secret)) return reply(res, 404);
+      const abort = new AbortController();
+      const disconnected = () => abort.abort();
+      res.once('close', disconnected);
+      try {
+        const snapshot = await chats.poll(phone.id, body, abort.signal);
+        if (!opts.phonePairing.authenticate(secret)) return reply(res, 404);
+        if (!res.destroyed) return reply(res, 200, snapshot);
+      }
+      catch (error) {
+        if (!res.destroyed) return reply(res, error instanceof ChatRequestError ? error.status : 404,
+          { error: error instanceof ChatRequestError ? error.message : 'Phone access was removed or expired.' });
+      }
+      finally { res.off('close', disconnected); }
+      return;
+    }
+    if (opts.phonePairing && (path === '/pair/claim' || path === '/pair/status')) {
+      // Native mobile clients do not send Origin. A website cannot claim a QR
+      // through a cross-origin form or fetch, including from the same machine.
+      if (req.headers.origin || req.method !== 'POST' || !req.headers['content-type']?.startsWith('application/json')) return reply(res, 404);
+      if (path === '/pair/status') {
+        const secret = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
+        const status = opts.phonePairing.status(secret);
+        return status ? reply(res, 200, status) : reply(res, 404);
+      }
+      try {
+        const body = await readJson(req, 4096) as { code?: unknown; name?: unknown } | null;
+        const claim = opts.phonePairing.claim(body?.code, body?.name);
+        return reply(res, 202, { state: 'pending', ...claim });
+      } catch { return reply(res, 400, { error: 'Pairing request is invalid or expired. Generate a new QR code.' }); }
+    }
+
+    const key = presentedKey(req);
+    const phone = opts.phonePairing?.authenticate(key);
+    const principal = phone?.id ?? (keyMatches(key, opts.key) ? 'owner' : undefined);
+    if (!principal) return reply(res, 404);
 
     const sessionId = req.headers['mcp-session-id'];
     const existing = typeof sessionId === 'string' ? transports.get(sessionId) : undefined;
+    if (existing && principals.get(sessionId as string) !== principal) return reply(res, 404);
 
     if (req.method === 'POST') {
       let body: unknown;
@@ -114,13 +183,18 @@ export async function startHttpMcp(opts: HttpMcpOptions): Promise<HttpMcp> {
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id) => {
           transports.set(id, transport);
+          principals.set(id, principal);
           opts.log(`remote client connected (${transports.size} open)`);
         },
       });
       transport.onclose = () => {
-        if (transport.sessionId) transports.delete(transport.sessionId);
+        if (transport.sessionId) {
+          transports.delete(transport.sessionId);
+          principals.delete(transport.sessionId);
+        }
       };
-      const server = createServer(opts.version, opts.policy, opts.accessGuard ?? requireAccess);
+      const server = createServer(opts.version, opts.policy, opts.accessGuard ?? requireAccess,
+        phone ? opts.phonePairing!.identity(phone.id) : undefined);
       await server.connect(transport);
       return transport.handleRequest(req, res, body);
     }
@@ -157,8 +231,11 @@ export async function startHttpMcp(opts: HttpMcpOptions): Promise<HttpMcp> {
     port,
     sessions: () => transports.size,
     close: async () => {
+      removeListener?.();
+      chats?.close();
       await Promise.allSettled([...transports.values()].map((t) => t.close()));
       transports.clear();
+      principals.clear();
       await new Promise<void>((resolve) => http.close(() => resolve()));
     },
   };

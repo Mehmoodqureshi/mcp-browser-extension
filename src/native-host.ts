@@ -24,6 +24,8 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { STORE_EXTENSION_ID } from '../shared/protocol';
+import type { PhoneReply } from '../shared/phone-pairing';
+import { phoneControlReply } from './remote/phone-control';
 
 /** The host's name, as the extension addresses it. */
 export const NATIVE_HOST_NAME = 'com.mehmoodqureshi.mcp_browser_extension';
@@ -216,12 +218,14 @@ export function frameMessage(msg: unknown): Buffer {
 export function runNativeHost(dataDir: string, profile?: string): void {
   const chunks: Buffer[] = [];
   let answered = false;
-  const answer = (reply: NativeReply): void => {
+  let pending = false;
+  const answer = (reply: NativeReply | PhoneReply): void => {
     if (answered) return;
     answered = true;
     process.stdout.write(frameMessage(reply), () => process.exit(0));
   };
   process.stdin.on('data', (c: Buffer) => {
+    if (answered || pending) return;
     chunks.push(c);
     const buf = Buffer.concat(chunks);
     if (buf.length < 4) return;
@@ -234,8 +238,13 @@ export function runNativeHost(dataDir: string, profile?: string): void {
     } catch {
       return answer({ ok: false, error: 'bad_request', message: 'not JSON' });
     }
+    if (msg.type === 'phone_pairing') {
+      pending = true;
+      void phoneControlReply(dataDir, msg).then(answer, () => answer({ ok: false, message: 'Could not reach phone pairing.' }));
+      return;
+    }
     if (msg.type !== 'pairing') return answer({ ok: false, error: 'bad_request', message: 'unknown request' });
     answer(pairingReply(dataDir, profile));
   });
-  process.stdin.on('end', () => answer({ ok: false, error: 'bad_request', message: 'no request' }));
+  process.stdin.on('end', () => { if (!pending) answer({ ok: false, error: 'bad_request', message: 'no request' }); });
 }

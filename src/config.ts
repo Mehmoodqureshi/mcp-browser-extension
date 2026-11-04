@@ -64,6 +64,8 @@ export interface CliConfig {
   httpPort: number;
   /** `--tunnel`: also open a Cloudflare quick tunnel to the HTTP port. Implies `--http`. */
   tunnel: boolean;
+  /** `--relay <url>`: also link to a relay server for a permanent public address. Implies `--http`. */
+  relay?: string;
   /** `--rotate-remote-key`: replace the remote key, cutting off every remote client. */
   rotateRemoteKey: boolean;
   /**
@@ -152,6 +154,7 @@ export function parseArgs(argv: string[]): CliConfig {
   let http = false;
   let httpPort = envInt('MCP_BROWSER_EXTENSION_HTTP_PORT') ?? DEFAULT_HTTP_PORT;
   let tunnel = false;
+  let relay: string | undefined;
   let rotateRemoteKey = false;
   let showHelp = false;
   let showVersion = false;
@@ -282,6 +285,10 @@ export function parseArgs(argv: string[]): CliConfig {
         tunnel = true;
         http = true;
         break;
+      case '--relay':
+        relay = requireValue(argv[++i], '--relay');
+        http = true;
+        break;
       case '--rotate-remote-key':
         rotateRemoteKey = true;
         break;
@@ -310,6 +317,21 @@ export function parseArgs(argv: string[]): CliConfig {
   // machine. Do not expose it through a public Cloudflare tunnel.
   if (noEmailVerification && tunnel) {
     throw new Error('--no-email-verification cannot be used with --tunnel');
+  }
+  if (noEmailVerification && relay) {
+    throw new Error('--no-email-verification cannot be used with --relay');
+  }
+  if (relay && tunnel) {
+    throw new Error('--relay and --tunnel each give a public address; use one');
+  }
+  if (relay) {
+    let protocol = '';
+    try {
+      protocol = new URL(relay).protocol;
+    } catch { /* reported below */ }
+    if (protocol !== 'https:' && !(protocol === 'http:' && /^http:\/\/(127\.0\.0\.1|localhost)[:/]/.test(relay))) {
+      throw new Error(`--relay needs an https URL (plain http only for a relay on this computer), got ${relay}`);
+    }
   }
 
   // File first, then flags win.
@@ -365,6 +387,7 @@ export function parseArgs(argv: string[]): CliConfig {
     http,
     httpPort,
     tunnel,
+    relay,
     rotateRemoteKey,
     showHelp,
     showVersion,
@@ -455,6 +478,9 @@ Connection:
   --tunnel               --http plus a Cloudflare quick tunnel, and print a public
                          connector URL for claude.ai, ChatGPT or any MCP client.
                          Needs cloudflared. The URL changes on every start.
+  --relay <url>          --http plus a link out to your own relay server (for example
+                         on AWS), for a permanent public address. The relay checks
+                         this computer's relay token, kept in <data-dir>/relay-token.
   --rotate-remote-key    Make a new remote key: every remote client is cut off and
                          needs the new URL.
   --no-auto-update       Run this copy even when a newer mcp-browser-extension is published.
@@ -468,7 +494,7 @@ Connection:
   --no-email-verification  Skip the hosted email/device access gate for trusted local use.
                          Email and device data are not sent to the access service.
                          Same as MCP_BROWSER_EXTENSION_EMAIL_VERIFICATION=0.
-                         Cannot be combined with --tunnel; the domain allowlist,
+                         Cannot be combined with --tunnel or --relay; the domain allowlist,
                          deny-all defaults, and other safety gates still apply.
 
 Backend:

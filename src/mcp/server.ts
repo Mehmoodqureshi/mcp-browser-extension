@@ -15,6 +15,7 @@ import { registerTools } from './tools';
 import { bypassEmailVerification, requireAccess } from '../access';
 import { noteMcpInitialize } from '../telemetry';
 import type { Policy } from '../security/policy';
+import type { ClientIdentity } from '../bridge/client-identity';
 
 // Re-exported so existing callers (and the CLI) keep importing the logger from
 // here; the implementation lives in ./log to avoid a server↔tools import cycle.
@@ -38,7 +39,7 @@ export const SERVER_INSTRUCTIONS =
   'Start with chrome_status. If it reports no paired browser (or any tool fails with NO_BACKEND), do not retry: ' +
   'give the user the steps in its `setup` field, which name what went wrong and how to fix it. ' +
   'If a tool fails with POLICY_DENIED because a site is not allowed, ask the user to allow it from the extension\'s ' +
-  'toolbar icon (its popup has an Allow button). Relay the friendly one-line approval steps from the error and wait for the person. It applies at once, with no restart. You cannot approve a site yourself or enable all-site access. ' +
+  'toolbar icon (its popup has an Allow button). Relay the friendly one-line approval steps from the error and wait for the person. It applies at once, with no restart. Only the person can approve a website warning or enable automatic website access. In automatic mode ordinary websites work without Allow; relay suspicious-site warning reasons and wait for the person. These local checks do not guarantee safety. ' +
   "Work in your own tab: tab_new opens one in the background, and calls without a tabId go to it, never to the tab the user is on. " +
   "To act on the user's current page, pass its tabId from tabs_list.";
 
@@ -48,7 +49,7 @@ const LOCAL_BYPASS_INSTRUCTIONS =
   'Approval and site refusals wait automatically: the tool call stays open (about 45 seconds) and continues on its own as soon as the person clicks Approve or Allow. Tell the person once. If it returns "Still waiting", call the same tool again; never use shell sleeps, timers or "I will check again later" messages, and never ask them to confirm in chat. ' +
   'Chrome blocks every extension from Chrome Web Store pages (chromewebstore.google.com and chrome.google.com/webstore, including the developer dashboard): they fail with TARGET_GONE "The extensions gallery cannot be scripted". Do not ask the person to allow those sites; it cannot help. ' +
   'Start with chrome_status. If it reports no paired browser (or any tool fails with NO_BACKEND), give the user the steps in its `setup` field. ' +
-  'If a tool fails with POLICY_DENIED because a site is not allowed, relay its friendly one-line approval steps and wait for the person to allow it from the extension\'s toolbar icon. Never approve it yourself or enable all-site access. ' +
+  'If a tool fails with POLICY_DENIED because a site is not allowed, relay its friendly one-line approval steps and wait for the person to allow it from the extension\'s toolbar icon. Only the person can approve a website warning or enable automatic website access. Ordinary websites need no Allow in automatic mode; relay any suspicious-site warning and wait for the person. ' +
   "Work in your own tab: tab_new opens one in the background. To act on the user's current page, pass its tabId from tabs_list.";
 
 /** Default version reported when no explicit version is passed in (legacy callers/tests). */
@@ -65,7 +66,7 @@ let transport: StdioServerTransport | null = null;
  * POLICY_DENIED, and the catalog is re-sent on every turn). Omit it and the
  * full catalog is advertised, which is what the tests want.
  */
-export function createServer(version: string = DEFAULT_VERSION, policy?: Policy, accessGuard: typeof requireAccess = requireAccess): McpServer {
+export function createServer(version: string = DEFAULT_VERSION, policy?: Policy, accessGuard: typeof requireAccess = requireAccess, phoneIdentity?: ClientIdentity): McpServer {
   const srv = new McpServer(
     { name: SERVER_NAME, version },
     {
@@ -73,7 +74,7 @@ export function createServer(version: string = DEFAULT_VERSION, policy?: Policy,
       instructions: accessGuard === bypassEmailVerification ? LOCAL_BYPASS_INSTRUCTIONS : SERVER_INSTRUCTIONS,
     },
   );
-  const advertised = registerTools(srv, policy, accessGuard);
+  const advertised = registerTools(srv, policy, accessGuard, phoneIdentity);
   watchInitialize(srv, advertised);
   // `McpServer` wraps the low-level `Server`, which owns the `onerror` hook.
   srv.server.onerror = (err: unknown): void => {

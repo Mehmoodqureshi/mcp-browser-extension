@@ -1,5 +1,7 @@
 import { ClientApprovals, isApprovalPage } from './client-approvals';
 import { CLIENT_STORAGE_KEY, type ClientConnection } from '../../../shared/client-auth';
+import { PHONE_ACTIONS, type PhoneAction } from '../../../shared/phone-pairing';
+import { phonePairingAction } from './phone-pairing';
 import { ACCESS_STOPPED_KEY, ACTIVITY_KEY } from '../../../shared/activity';
 import { AccessSwitch } from './access-switch';
 import { ActivityLog } from './activity';
@@ -619,6 +621,27 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
       reply({ ok: true });
     }, (err) => reply({ ok: false, error: err instanceof Error ? err.message : 'Could not save website access.' }))
       .finally(() => { if (msg.type === 'site_checks_mode' && msg.allow) void reopenPopup(sender); });
+    return true;
+  }
+  if (msg?.type === 'phone_pairing') {
+    if (!isApprovalPage(sender) || !PHONE_ACTIONS.includes(msg.action as PhoneAction)) {
+      reply({ ok: false, message: 'Use Pair phone in the extension popup.' });
+      return;
+    }
+    const permission = msg.action === 'create'
+      ? chrome.permissions.request({ permissions: ['nativeMessaging'] })
+      : chrome.permissions.contains({ permissions: ['nativeMessaging'] });
+    void permission.then(async (granted) => {
+      if (!granted) { reply({ ok: false, message: 'Click Generate QR code to allow phone pairing.' }); return; }
+      if (typeof chrome.runtime.sendNativeMessage !== 'function' && msg.action === 'create') {
+        reply({ ok: false, message: 'Permission saved. Reopen the extension and click Pair phone.' });
+        setTimeout(() => chrome.runtime.reload(), 200);
+        return;
+      }
+      reply(await phonePairingAction(msg.action, msg.id, {
+        approvals, stopped: () => access.stopped, connected: () => ws.isConnected(),
+      }));
+    }).catch(() => reply({ ok: false, message: 'Could not open phone pairing. Try again.' }));
     return true;
   }
   if (msg?.type === 'connect_with_click') {

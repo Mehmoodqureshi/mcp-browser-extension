@@ -131,12 +131,22 @@ export async function readAsMarkdown(
   ex: Executor,
   args: { selector?: string; tabId?: string } & FrameOpts,
 ): Promise<string> {
-  const { html } = await ex.getHtml(args.selector ? { selector: args.selector } : undefined, {
-    tabId: args.tabId,
-    frameId: args.frameId,
-    allFrames: args.allFrames,
-  });
-  return htmlToMarkdown(html);
+  const target = args.selector ? { selector: args.selector } : undefined;
+  const frames = { tabId: args.tabId, frameId: args.frameId, allFrames: args.allFrames };
+  try {
+    const { html } = await ex.getHtml(target, frames);
+    return htmlToMarkdown(html);
+  } catch (error) {
+    // An older shared bridge maps unknown wire codes to TARGET_GONE but
+    // preserves the message. Support that mixed-version installation too.
+    if (!(error instanceof ExecutorError) || !(error.code === 'RESULT_TOO_LARGE' ||
+      (error.code === 'TARGET_GONE' && error.message.startsWith('[RESULT_TOO_LARGE]')))) throw error;
+    // Large embedded scripts/assets can dwarf a page's readable content.
+    // Keep the same target and frame, and let the extension recheck access.
+    // A text result that is itself too large still fails explicitly.
+    const { text } = await ex.getText(target, frames);
+    return `Text-only view of this page:\n\n${text}`;
+  }
 }
 
 /**

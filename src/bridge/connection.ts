@@ -40,6 +40,7 @@ export function defaultTimeoutFor(method: WireMethod): number {
  *  near-superset; unknown codes degrade to CDP_ERROR while keeping the message). */
 export function mapWireErrorCode(code: string): ExecutorErrorCodeLocal {
   const known: Record<string, ExecutorErrorCodeLocal> = {
+    RESULT_TOO_LARGE: 'RESULT_TOO_LARGE',
     TIMEOUT: 'TIMEOUT',
     POLICY_DENIED: 'POLICY_DENIED',
     DETACHED: 'DETACHED',

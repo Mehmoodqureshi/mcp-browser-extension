@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 import { runInNewContext } from 'node:vm';
 import { webcrypto } from 'node:crypto';
+import { MAX_BRIDGE_FRAME_BYTES } from '../shared/protocol';
 
 const source = buildSync({ entryPoints: ['extension/src/sw/ws-client.ts'], bundle: true, write: false, format: 'cjs', platform: 'browser' }).outputFiles[0].text;
 
@@ -23,7 +24,7 @@ test('connection changes rotate challenges, ignore old sockets and never reroute
     receive(frame: unknown) { this.onmessage({ data: JSON.stringify(frame) }); }
   }
   const module = { exports: {} as any };
-  runInNewContext(source, { module, exports: module.exports, crypto: webcrypto, WebSocket: FakeSocket,
+  runInNewContext(source, { module, exports: module.exports, crypto: webcrypto, TextEncoder, WebSocket: FakeSocket,
     navigator: { userAgent: 'Chrome/116' }, chrome: { runtime: { id: 'test', getManifest: () => ({ version: 'test' }) } } });
   const replies: Array<(frame: unknown) => void> = [];
   const client = new module.exports.WsClient({ onCommand: (_cmd: unknown, reply: (frame: unknown) => void) => replies.push(reply),
@@ -52,4 +53,38 @@ test('connection changes rotate challenges, ignore old sockets and never reroute
   fresh.receive(command);
   replies[1]({ type: 'result', id: '1', data: 'new page' });
   assert.equal(fresh.sent[1].data, 'new page');
+});
+
+test('oversized results return a bounded error and the same socket still handles the next command', () => {
+  let socket: FakeSocket;
+  class FakeSocket {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    readyState = 1;
+    sent: string[] = [];
+    onopen = () => {};
+    onmessage = (_ev: { data: string }) => {};
+    constructor(_url: string) { socket = this; }
+    send(text: string) { this.sent.push(text); }
+    receive(frame: unknown) { this.onmessage({ data: JSON.stringify(frame) }); }
+  }
+  const module = { exports: {} as any };
+  runInNewContext(source, { module, exports: module.exports, crypto: webcrypto, TextEncoder, WebSocket: FakeSocket,
+    navigator: { userAgent: 'Chrome/116' }, chrome: { runtime: { id: 'test', getManifest: () => ({ version: 'test' }) } } });
+  let data: unknown;
+  const client = new module.exports.WsClient({ onCommand: (cmd: { id: string }, reply: (frame: unknown) => void) =>
+    reply({ type: 'result', v: 1, id: cmd.id, ok: true, data }), onState() {}, onPolicy() {}, log() {} });
+  client.connect(38017, 'test-token');
+  socket!.receive({ type: 'welcome', v: 1, policy: {} });
+  for (const huge of ['x'.repeat(MAX_BRIDGE_FRAME_BYTES), '\u754c'.repeat(Math.ceil(MAX_BRIDGE_FRAME_BYTES / 3)), '\u0001'.repeat(Math.ceil(MAX_BRIDGE_FRAME_BYTES / 6))]) {
+    data = { html: huge };
+    socket!.receive({ type: 'command', v: 1, id: 'large', method: 'get_html', params: {} });
+    const encoded = socket!.sent.at(-1)!;
+    assert.ok(Buffer.byteLength(encoded) <= MAX_BRIDGE_FRAME_BYTES);
+    assert.equal(JSON.parse(encoded).error.code, 'RESULT_TOO_LARGE');
+    assert.equal(client.isConnected(), true);
+  }
+  data = { text: 'Still connected' };
+  socket!.receive({ type: 'command', v: 1, id: 'next', method: 'get_text', params: {} });
+  assert.equal(JSON.parse(socket!.sent.at(-1)!).data.text, 'Still connected');
 });

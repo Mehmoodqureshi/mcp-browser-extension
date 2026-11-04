@@ -17,6 +17,8 @@ export interface ClientProof {
 }
 
 export interface ClientConnection {
+  kind?: 'phone';
+  phoneId?: string;
   id: string;
   publicKey: string;
   name: string;

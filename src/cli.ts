@@ -28,6 +28,9 @@ import { logDebug, logErr, mcpClientInfo, setLogLevel, startMcpServer, stopMcpSe
 import { startHttpMcp } from './remote/http';
 import { resolveRemoteKey } from './remote/key';
 import { startQuickTunnel, type Tunnel } from './remote/tunnel';
+import { connectRelay, relayTokenPath, resolveRelayToken, type RelayLink } from './remote/relay';
+import { PhonePairing } from './remote/phone-pairing';
+import { startPhoneControl } from './remote/phone-control';
 import { TOOL_NAMES, setProfileBridge, setToolAllowlist } from './mcp/tools';
 import { initTelemetry, stopTelemetry } from './telemetry';
 import { maybeHandOff } from './auto-update';
@@ -507,6 +510,8 @@ async function serveRemote(
   stopBridge: () => Promise<unknown>,
 ): Promise<void> {
   const key = resolveRemoteKey(dataDir, { rotate: cfg.rotateRemoteKey });
+  const phonePairing = new PhonePairing(dataDir, cfg.profile);
+  if (cfg.rotateRemoteKey) for (const phone of phonePairing.state().devices) phonePairing.remove(phone.id);
   if (cfg.rotateRemoteKey) logErr('remote key rotated: every earlier connector URL stops working.');
   const http = await startHttpMcp({
     port: cfg.httpPort,
@@ -515,14 +520,19 @@ async function serveRemote(
     policy: cfg.policy,
     log: (m) => logErr(m),
     accessGuard: cfg.noEmailVerification ? bypassEmailVerification : undefined,
+    phonePairing,
+    phoneChat: process.env.MBE_PHONE_CODEX === '1' || process.env.MBE_PHONE_CHAT === '1',
   });
+  const phoneControl = await startPhoneControl(phonePairing).catch(async (err) => { await http.close(); throw err; });
   let tunnel: Tunnel | null = null;
+  let relay: RelayLink | null = null;
   let shuttingDown = false;
   const shutdown = (): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     tunnel?.stop();
-    exitWithDeadline(Promise.allSettled([http.close(), stopBridge()]));
+    relay?.stop();
+    exitWithDeadline(Promise.allSettled([phoneControl.close(), http.close(), stopBridge()]));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -533,33 +543,65 @@ async function serveRemote(
         localPort: http.port,
         log: (m) => logErr(m),
         onExit: (code) => {
+          phonePairing.setPublicUrl();
           if (shuttingDown) return;
           logErr(`the tunnel closed (cloudflared exit ${code}); remote clients are cut off. Restart to get a new URL.`);
         },
       });
+      phonePairing.setPublicUrl(tunnel.url);
     } catch (err) {
+      await phoneControl.close();
       await http.close();
       throw err;
     }
   }
 
-  const base = tunnel ? tunnel.url : `http://127.0.0.1:${http.port}`;
-  const lines = [
-    '',
+  const printConnector = (base: string, headline: string, notes: string[] = []): void => {
+    const lines = [
+      '',
+      headline,
+      '',
+      'Connector URL (paste into claude.ai > Settings > Connectors, ChatGPT, or any MCP client):',
+      `  ${base}/mcp/${key}`,
+      '',
+      'Or send the key as a header, e.g. for Claude Code on another computer:',
+      `  claude mcp add --transport http browser ${base}/mcp --header "Authorization: Bearer ${key}"`,
+      '',
+      'Anyone with this URL can drive this Chrome within the allowed sites. Keep it private.',
+      'Cut everyone off: restart with --rotate-remote-key.',
+      ...notes,
+      '',
+    ];
+    process.stdout.write(`${lines.join('\n')}\n`);
+  };
+
+  if (cfg.relay) {
+    // The relay names the public address once it accepts this computer; print
+    // the connector then, and only once (the link reconnects after outages).
+    let announced = false;
+    logErr(`linking to the relay at ${cfg.relay} (relay token: ${relayTokenPath(dataDir)})`);
+    relay = connectRelay({
+      url: cfg.relay,
+      token: resolveRelayToken(dataDir),
+      localPort: http.port,
+      log: (m) => logErr(m),
+      onOffline: () => phonePairing.setPublicUrl(),
+      onReady: (publicUrl) => {
+        try { phonePairing.setPublicUrl(publicUrl); } catch { logErr('phone pairing requires an HTTPS relay address'); }
+        if (announced) return logErr('relay link restored');
+        announced = true;
+        printConnector(publicUrl.replace(/\/+$/, ''), 'MCP Browser Extension is reachable from anywhere through your relay.',
+          ['The address stays the same; this computer reconnects to the relay on its own.']);
+      },
+    });
+    return;
+  }
+
+  printConnector(
+    tunnel ? tunnel.url : `http://127.0.0.1:${http.port}`,
     tunnel ? 'MCP Browser Extension is reachable from anywhere.' : `MCP Browser Extension is serving MCP over HTTP on 127.0.0.1:${http.port}.`,
-    '',
-    'Connector URL (paste into claude.ai > Settings > Connectors, ChatGPT, or any MCP client):',
-    `  ${base}/mcp/${key}`,
-    '',
-    'Or send the key as a header, e.g. for Claude Code on another computer:',
-    `  claude mcp add --transport http browser ${base}/mcp --header "Authorization: Bearer ${key}"`,
-    '',
-    'Anyone with this URL can drive this Chrome within the allowed sites. Keep it private.',
-    'Cut everyone off: restart with --rotate-remote-key.',
-    ...(tunnel ? ['The tunnel URL changes every time this starts.'] : []),
-    '',
-  ];
-  process.stdout.write(`${lines.join('\n')}\n`);
+    tunnel ? ['The tunnel URL changes every time this starts.'] : [],
+  );
 }
 
 main().catch((err) => {

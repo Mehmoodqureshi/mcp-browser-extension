@@ -481,6 +481,60 @@ test('draw sends real mouse strokes onto a canvas', { skip }, async () => {
 
 // ---------------------------------------------------------------- upload_file
 
+test('drawing can exceed 20 seconds while individual mouse events remain responsive', { skip }, async () => {
+  const tab = await openExtra('/canvas');
+  await h.sw.evaluate(() => {
+    const g = globalThis as any, c = g.chrome;
+    g.restoreDrawingSend = c.debugger.sendCommand.bind(c.debugger);
+    c.debugger.sendCommand = async (target: unknown, method: string, params: unknown) => {
+      const result = await g.restoreDrawingSend(target, method, params);
+      if (method === 'Input.dispatchMouseEvent') await new Promise((resolve) => setTimeout(resolve, 1050));
+      return result;
+    };
+  });
+  try {
+    const start = Date.now();
+    // Eighteen points produce twenty input events, each answering normally.
+    const result = await h.json<{ ok: boolean; points: number }>('draw', {
+      tabId: tab, strokes: [{ points: Array.from({ length: 18 }, (_, i) => ({ x: 20 + i * 10, y: 40 + i * 5 })) }],
+    });
+    assert.ok(Date.now() - start > 20_000, 'exercise the former whole-drawing timeout');
+    assert.equal(result.ok, true); assert.equal(result.points, 18);
+    const state = JSON.parse(await textAt('#ev', tab));
+    assert.equal(state.down, 1); assert.equal(state.up, 1); assert.equal(state.moves, 17);
+  } finally {
+    await h.sw.evaluate(() => { const g = globalThis as any; g.chrome.debugger.sendCommand = g.restoreDrawingSend; delete g.restoreDrawingSend; });
+    await h.json('tab_close', { tabId: tab });
+  }
+});
+
+test('a disconnected drawing reports partial work without replaying its strokes', { skip }, async () => {
+  const tab = await openExtra('/canvas');
+  await h.sw.evaluate(() => {
+    const g = globalThis as any, c = g.chrome;
+    g.restoreDrawingSend = c.debugger.sendCommand.bind(c.debugger); g.drawingEvents = 0; g.drawingPresses = 0;
+    c.debugger.sendCommand = async (target: unknown, method: string, params: any) => {
+      if (method === 'Input.dispatchMouseEvent') {
+        if (params.type === 'mousePressed') g.drawingPresses++;
+        if (++g.drawingEvents === 3) { await c.debugger.detach(target); throw new Error('Debugger is not attached'); }
+      }
+      return g.restoreDrawingSend(target, method, params);
+    };
+  });
+  try {
+    const result = await h.call('draw', { tabId: tab, strokes: [{ points: [{ x: 20, y: 20 }, { x: 60, y: 40 }] }] });
+    assert.equal(result.isError, true); assert.match(textOf(result), /Some marks may already be visible/);
+    assert.equal(await h.sw.evaluate(() => (globalThis as any).drawingPresses), 1, 'never press again to replay a partial stroke');
+    await h.json('screenshot', { tabId: tab });
+  } finally {
+    await h.sw.evaluate(() => {
+      const g = globalThis as any; g.chrome.debugger.sendCommand = g.restoreDrawingSend;
+      delete g.restoreDrawingSend; delete g.drawingEvents; delete g.drawingPresses;
+    });
+    await h.json('tab_close', { tabId: tab });
+  }
+});
+
 test('upload_file sets a file from the uploads dir on the input', { skip }, async () => {
   const tab = await h.open('/upload');
   await h.json('upload_file', { selector: '#file', files: [join(h.uploadsDir, 'hello.txt')], tabId: tab });

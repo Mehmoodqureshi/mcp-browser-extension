@@ -1,6 +1,7 @@
 import '../client-connections';
 import '../site-protection-ui';
 import { SITE_CHECKS_KEY } from '../../../shared/site-risk';
+import './phone-pairing';
 import './access-lists';
 import '../activity-dashboard';
 import { ACCESS_STOPPED_KEY } from '../../../shared/activity';

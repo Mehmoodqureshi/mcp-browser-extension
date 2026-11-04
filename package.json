@@ -30,7 +30,8 @@
     "SETUP.md",
     "LICENSE",
     "docs/BLUEPRINT.md",
-    "docs/CLIENT-APPROVAL.md"
+    "docs/CLIENT-APPROVAL.md",
+    "docs/PHONE-PAIRING.md"
   ],
   "keywords": [
     "mcp",
@@ -63,16 +64,20 @@
     "prepack": "npm run clean && npm run build && npm run build:ext"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.318",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "htmlparser2": "^10.1.0",
+    "qrcode": "^1.5.4",
     "ws": "^8.18.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",
     "@types/node": "^20.17.10",
+    "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.5.13",
     "esbuild": "^0.28.2",
+    "jsqr": "^1.4.0",
     "playwright": "^1.49.1",
     "rimraf": "^5.0.10",
     "typescript": "^5.7.2"

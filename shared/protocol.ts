@@ -28,6 +28,9 @@ export type ProtocolVersion = typeof PROTOCOL_VERSION;
  */
 export const DEFAULT_WS_PORT = 38017 as const;
 
+/** Maximum encoded JSON frame, shared by the receiver and result sender. */
+export const MAX_BRIDGE_FRAME_BYTES = 4 * 1024 * 1024;
+
 /**
  * The Chrome Web Store copy of the extension. Chrome updates that copy on its
  * own; any other id is an unpacked (or self-packed) copy, which only changes
@@ -118,6 +121,13 @@ export const FILL_FORM_MAX_TIMEOUT_MS = 600_000;
 export function fillFormTimeoutMs(fields: number): number {
   const n = Number.isFinite(fields) && fields > 0 ? Math.floor(fields) : 0;
   return Math.min(FILL_FORM_MAX_TIMEOUT_MS, Math.max(FILL_FORM_MIN_TIMEOUT_MS, 10_000 + n * FILL_FORM_PER_FIELD_MS));
+}
+
+/** Drawing sends one mouse event per point plus press/release events per stroke.
+ * Budget the whole drawing separately from the deadline for one stalled event. */
+export function drawTimeoutMs(points: number, strokes: number): number {
+  const events = Math.max(0, points) + 2 * Math.max(0, strokes);
+  return Math.min(240_000, Math.max(30_000, 10_000 + events * 60));
 }
 
 /**
@@ -218,6 +228,7 @@ export const WIRE_METHODS: readonly WireMethod[] = [
 // ---------------------------------------------------------------------------
 
 export type ExecutorErrorCode =
+  | 'RESULT_TOO_LARGE'
   | 'NO_TARGET'
   | 'TARGET_GONE'
   | 'DETACHED'

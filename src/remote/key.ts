@@ -18,7 +18,7 @@ function enforcePrivateMode(path: string): void {
   if (process.platform === 'win32') return;
   chmodSync(path, 0o600);
   if ((statSync(path).mode & 0o077) !== 0) {
-    throw new Error(`remote key ${path} is group/other-accessible; refusing to expose the key`);
+    throw new Error(`secret ${path} is group/other-accessible; refusing to expose it`);
   }
 }
 
@@ -28,7 +28,11 @@ export function remoteKeyPath(dataDir: string): string {
 
 /** The stored key, or a fresh one when there is none, it is malformed, or `rotate` is set. */
 export function resolveRemoteKey(dataDir: string, opts: { rotate?: boolean } = {}): string {
-  const path = remoteKeyPath(dataDir);
+  return resolveSecret(remoteKeyPath(dataDir), opts);
+}
+
+/** A 32-byte secret kept privately at `path`, made on first use or when `rotate` is set. */
+export function resolveSecret(path: string, opts: { rotate?: boolean } = {}): string {
   if (!opts.rotate && existsSync(path)) {
     const stored = readFileSync(path, 'utf8').trim();
     if (KEY_SHAPE.test(stored)) {

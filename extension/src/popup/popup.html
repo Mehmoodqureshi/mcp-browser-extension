@@ -125,6 +125,18 @@
       }
 
       [hidden] { display: none !important; }
+      .phone-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .phone-heading h2 { margin: 0; }
+      #phone-dialog { width: 336px; max-height: 520px; margin: auto; padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+      #phone-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+      #phone-dialog button { min-height: 44px; }
+      #phone-qr { display: block; width: 264px; height: 264px; max-width: 100%; margin: 16px auto 8px; background: #fff; border-radius: 8px; }
+      #phone-expiry { text-align: center; font-variant-numeric: tabular-nums; }
+      #phone-error { color: var(--warn); }
+      #phone-devices li { border-top: 1px solid var(--line); padding: 12px 0; overflow-wrap: anywhere; }
+      #phone-devices strong { display: block; }
+      .phone-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .phone-code { font-size: 20px; font-weight: 600; letter-spacing: 3px; font-variant-numeric: tabular-nums; }
     </style>
   </head>
   <body data-view="popup">
@@ -149,6 +161,11 @@
           <button id="access-resume" class="primary" hidden>Resume connection</button>
         </div>
         <p class="note" id="access-note" role="status"></p>
+      </section>
+
+      <section class="card" id="phone-section" aria-label="Phone access">
+        <div class="phone-heading"><h2>Phone access</h2><button id="phone-open">Pair phone</button></div>
+        <p class="note">Connect your phone by scanning a QR code.</p>
       </section>
 
       <section class="card" id="clients-section">
@@ -227,6 +244,17 @@
       </span>
       <button class="footer-link" id="settings">Settings <span aria-hidden="true">→</span></button>
     </footer>
+    <dialog id="phone-dialog" aria-labelledby="phone-title" aria-describedby="phone-description">
+      <div class="phone-heading"><h2 id="phone-title">Pair your phone</h2><button id="phone-close" aria-label="Close phone pairing">Close</button></div>
+      <p class="note" id="phone-description">Scan with the MCP Browser Extension mobile app, then approve the phone here.</p>
+      <p class="note" id="phone-status" role="status" aria-live="polite"></p>
+      <p class="note" id="phone-error" role="alert" hidden></p>
+      <canvas id="phone-qr" role="img" aria-label="Temporary phone pairing QR code" hidden></canvas>
+      <p class="note" id="phone-expiry" hidden></p>
+      <div class="phone-actions"><button class="primary" id="phone-generate">Generate QR code</button><button id="phone-cancel" hidden>Cancel pairing</button></div>
+      <ul id="phone-devices" aria-label="Paired phones and pairing requests"></ul>
+      <p class="note">Phones can use only websites you allow in this browser. Access lasts 30 days. Keep your computer awake and Chrome open.</p>
+    </dialog>
     <script src="popup.js"></script>
   </body>
 </html>

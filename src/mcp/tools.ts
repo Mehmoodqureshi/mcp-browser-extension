@@ -1,4 +1,4 @@
-import { createClientIdentity, withClientIdentity } from '../bridge/client-identity';
+import { createClientIdentity, currentClientIdentity, withClientIdentity, type ClientIdentity } from '../bridge/client-identity';
 /**
  * src/mcp/tools.ts — the MCP tool surface: the advertised catalog
  * (`TOOL_DEFINITIONS`, each with a zod `inputSchema`), the name→handler dispatch
@@ -1073,9 +1073,12 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
   page_watch: async (a, ctx) => {
     const action = requireString(a, 'action');
     const ws = getActiveWorkspace();
-    if (action === 'list') return jsonResult({ watches: listWatches(ws.profileDir) });
+    // Phones share a browser profile, but their saved page data belongs only
+    // to their own workspace. Desktop checkpoints remain profile-scoped.
+    const watchDir = currentClientIdentity()?.profile ? ws.taskDir : ws.profileDir;
+    if (action === 'list') return jsonResult({ watches: listWatches(watchDir) });
     if (action === 'delete') {
-      removeWatch(ws.profileDir, requireString(a, 'watchId'));
+      removeWatch(watchDir, requireString(a, 'watchId'));
       return jsonResult({ deleted: true });
     }
     await gate(ctx, 'get_text', { tabId: tabId(a) });
@@ -1083,11 +1086,11 @@ export const TOOL_HANDLERS: Record<string, ToolHandler> = {
     const clean = safeSnapshot(snap, (s) => redactText(s, redaction(ctx.policy)).value);
     if (action === 'create') {
       const name = requireWithinLength(requireString(a, 'name'), 'name', 80);
-      const saved = createWatch(ws.profileDir, name, clean);
-      return jsonResult({ watchId: saved.id, name: saved.name, url: saved.url, title: clean.title, elements: clean.nodes.length, savedAt: new Date(saved.ts).toISOString(), note: 'Checkpoint saved locally for this Chrome profile. Form values are not stored.' });
+      const saved = createWatch(watchDir, name, clean);
+      return jsonResult({ watchId: saved.id, name: saved.name, url: saved.url, title: clean.title, elements: clean.nodes.length, savedAt: new Date(saved.ts).toISOString(), note: `Checkpoint saved locally for this ${currentClientIdentity()?.profile ? 'phone' : 'Chrome profile'}. Form values are not stored.` });
     }
     if (action === 'compare') {
-      const previous = readWatch(ws.profileDir, requireString(a, 'watchId'));
+      const previous = readWatch(watchDir, requireString(a, 'watchId'));
       // The site's grant may have been revoked since the checkpoint was saved.
       await gate(ctx, 'get_text', { url: previous.url });
       const diff = compareWatch(previous, clean, (s) => redactText(s, redaction(ctx.policy)).value);
@@ -1573,6 +1576,9 @@ function isRetryableFault(name: string, err: unknown): boolean {
 }
 
 export async function dispatchToolCall(name: string, rawArgs: unknown, opts: { quietRefusal?: boolean } = {}): Promise<CallToolResult> {
+  const client = currentClientIdentity();
+  try { client?.assertAccess?.(); } catch { return errorResult('Phone access was removed or expired.'); }
+  if (client?.profile && PHONE_DISABLED_TOOLS.has(name)) return errorResult('This tool is not available to a paired phone.');
   // The allowlist is checked here, not only at registration, so a `batch` op
   // cannot reach a tool the operator kept off the surface.
   if (!isToolEnabled(name)) return errorResult(`tool not enabled on this server (--tools): ${name}`);
@@ -1663,9 +1669,11 @@ function modelFromMeta(meta: unknown): string | undefined {
 }
 
 /** Register the tool surface; returns the names actually advertised. */
-export function registerTools(server: McpServer, policy?: Policy, accessGuard: typeof requireAccess = requireAccess): string[] {
+const PHONE_DISABLED_TOOLS = new Set(['profile_use', 'profile_rename', 'task_new', 'tasks_list', 'task_status']);
+
+export function registerTools(server: McpServer, policy?: Policy, accessGuard: typeof requireAccess = requireAccess, phoneIdentity?: ClientIdentity): string[] {
   assertNoDrift();
-  const identity = createClientIdentity(() => {
+  const identity = phoneIdentity ?? createClientIdentity(() => {
     const client = server.server.getClientVersion();
     return client ? `${client.name} ${client.version}` : 'Unnamed app';
   });
@@ -1678,6 +1686,7 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
   const registered: string[] = [];
   for (const d of TOOL_DEFINITIONS) {
     if (!isToolEnabled(d.name)) continue;
+    if (phoneIdentity && PHONE_DISABLED_TOOLS.has(d.name)) continue;
     // A tool the policy has switched off can only ever answer POLICY_DENIED.
     // Don't pay for its schema on every turn, and don't invite a wasted call.
     if (!isToolPolicyUsable(d.name, policy)) {
@@ -1688,6 +1697,7 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
       d.name,
       { description: d.description, inputSchema: d.inputSchema },
       async (args, extra) => withClientIdentity(identity, async () => {
+        try { identity.assertAccess?.(); } catch { return errorResult('Phone access was removed or expired.'); }
         noteMcpModel(modelFromMeta(extra?._meta));
         let verifiedNow = false;
         const accessError = await accessGuard(server.server, resolveDataDir(), {
@@ -1701,9 +1711,10 @@ export function registerTools(server: McpServer, policy?: Policy, accessGuard: t
         // Approval and site refusals run nothing, so the call waits for the
         // person here and continues once they click Approve or Allow.
         const result = await waitForPerson(async (retry) => {
+          try { identity.assertAccess?.(); } catch { return errorResult('Phone access was removed or expired.'); }
           if (profileBridge?.hasActiveExtension()) {
             const active = peekActiveWorkspace()?.profile ?? 'default';
-            const profile = profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name;
+            const profile = phoneIdentity?.profile ?? (profileBridge.hasConnection(active) ? active : profileBridge.pairedProfiles()[0]?.name);
             try {
               await profileBridge.sendCommand('ping_probe', { requireClientApproval: true }, { profile });
             } catch (err) { return errorResult(err instanceof Error ? err.message : 'Chrome client approval is required.'); }

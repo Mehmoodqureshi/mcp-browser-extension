@@ -155,7 +155,7 @@ test('sharing the bridge token does not confer the hub app approval', { skip }, 
     raw.send(JSON.stringify({ type: 'relay', id: 'attack', method: 'tabs_list', params: {} }));
     const denied = await result;
     assert.equal(denied.ok, false);
-    assert.match(JSON.stringify(denied), /Signed client authorization/);
+    assert.match(JSON.stringify(denied), /Signed client authorization is missing: an AI app on this computer \(process 123\) is running an MCP Browser Extension server older than 0\.9\.32/);
     await h.approveClient(peer);
     assert.ok(Array.isArray(await peer.sendCommand('tabs_list', {})));
     assert.ok(Array.isArray(await h.bridge.sendCommand('tabs_list', {})));

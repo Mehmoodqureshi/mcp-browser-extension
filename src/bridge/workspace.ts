@@ -14,6 +14,7 @@
 
 import { appendFileSync, copyFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { sanitizeName } from '../config';
 // `mcp/log` (not `mcp/server`) so this stays free of the server import cycle
@@ -23,6 +24,8 @@ import { MAX_DOWNLOAD_BYTES, sanitizeDownloadName } from '../../shared/download'
 import { ensureWorkspace, type Workspace } from './datadir';
 
 let active: Workspace | null = null;
+const scoped = new AsyncLocalStorage<Workspace>();
+export const withWorkspace = <T>(workspace: Workspace, fn: () => T): T => scoped.run(workspace, fn);
 /** Monotonic counter so saved result/screenshot filenames sort in capture order. */
 let seq = 0;
 
@@ -33,13 +36,14 @@ export function setActiveWorkspace(w: Workspace): void {
 
 /** The current workspace. Throws if the boot path never installed one. */
 export function getActiveWorkspace(): Workspace {
-  if (!active) throw new Error('no active workspace (server not fully booted)');
-  return active;
+  const workspace = peekActiveWorkspace();
+  if (!workspace) throw new Error('no active workspace (server not fully booted)');
+  return workspace;
 }
 
 /** The current workspace, or null before boot completes (for non-throwing callers). */
 export function peekActiveWorkspace(): Workspace | null {
-  return active;
+  return scoped.getStore() ?? active;
 }
 
 /** Reset for tests. */
@@ -55,6 +59,7 @@ export function resetActiveWorkspaceForTesting(): void {
  * the resolved workspace.
  */
 export function switchWorkspace(opts: { profile?: string; task?: string; meta?: Record<string, unknown> }): Workspace {
+  if (scoped.getStore()) throw new Error('A paired phone cannot switch browser or task workspaces.');
   const cur = getActiveWorkspace();
   const profile = opts.profile === undefined ? cur.profile : sanitizeName(opts.profile, 'profile');
   // A profile switch resets the task to "default" unless the caller names one.

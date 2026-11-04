@@ -213,7 +213,10 @@ test('interaction methods flatten targets and frame options into params', async 
 
   const strokes = [{ points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }];
   await ex.draw(strokes as never, { tabId: 'c1' });
-  assert.deepEqual(last(), { method: 'draw', params: { strokes }, opts: { tabId: 'c1', profile: 'default' } });
+  assert.deepEqual(last(), { method: 'draw', params: { strokes }, opts: { tabId: 'c1', profile: 'default', timeoutMs: 30_000 } });
+  const longer = [{ points: Array.from({ length: 1000 }, (_, x) => ({ x, y: 20 })) }];
+  await ex.draw(longer, { tabId: 'c1' });
+  assert.ok(last().opts!.timeoutMs! > 60_000, 'long drawings must not expire at the old 30s bridge deadline');
 
   await ex.uploadFile({ selector: 'input[type=file]' }, ['/tmp/a.txt'], { tabId: 't1' });
   assert.deepEqual(last().params, { selector: 'input[type=file]', files: ['/tmp/a.txt'] });
