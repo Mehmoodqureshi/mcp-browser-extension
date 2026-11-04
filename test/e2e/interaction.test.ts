@@ -488,20 +488,21 @@ test('drawing can exceed 20 seconds while individual mouse events remain respons
     g.restoreDrawingSend = c.debugger.sendCommand.bind(c.debugger);
     c.debugger.sendCommand = async (target: unknown, method: string, params: unknown) => {
       const result = await g.restoreDrawingSend(target, method, params);
-      if (method === 'Input.dispatchMouseEvent') await new Promise((resolve) => setTimeout(resolve, 1050));
+      if (method === 'Input.dispatchMouseEvent') await new Promise((resolve) => setTimeout(resolve, 5250));
       return result;
     };
   });
   try {
     const start = Date.now();
-    // Eighteen points produce twenty input events, each answering normally.
+    // Two points produce four slow but healthy input events (21s in all). Few events
+    // keep per-event runner overhead (about 0.7s on CI) well under the 29s budget.
     const result = await h.json<{ ok: boolean; points: number }>('draw', {
-      tabId: tab, strokes: [{ points: Array.from({ length: 18 }, (_, i) => ({ x: 20 + i * 10, y: 40 + i * 5 })) }],
+      tabId: tab, strokes: [{ points: [{ x: 20, y: 40 }, { x: 180, y: 120 }] }],
     });
     assert.ok(Date.now() - start > 20_000, 'exercise the former whole-drawing timeout');
-    assert.equal(result.ok, true); assert.equal(result.points, 18);
+    assert.equal(result.ok, true); assert.equal(result.points, 2);
     const state = JSON.parse(await textAt('#ev', tab));
-    assert.equal(state.down, 1); assert.equal(state.up, 1); assert.equal(state.moves, 17);
+    assert.equal(state.down, 1); assert.equal(state.up, 1); assert.equal(state.moves, 1);
   } finally {
     await h.sw.evaluate(() => { const g = globalThis as any; g.chrome.debugger.sendCommand = g.restoreDrawingSend; delete g.restoreDrawingSend; });
     await h.json('tab_close', { tabId: tab });
