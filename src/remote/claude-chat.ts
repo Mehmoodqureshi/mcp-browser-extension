@@ -8,6 +8,15 @@ import type { PhonePairing } from './phone-pairing';
 import { ChatRequestError, chatInstructions, toolActivity, type ChatRunner, type ChatSpeed } from './phone-chat';
 
 const SERVER = 'browser';
+const SDK = '@anthropic-ai/claude-agent-sdk';
+
+/**
+ * The Claude Agent SDK bundles Claude Code (hundreds of MB), so it is an
+ * optional peer: only computers that offer Claude in phone chat install it.
+ */
+export function claudeChatAvailable(resolve: (id: string) => string = require.resolve): boolean {
+  try { resolve(SDK); return true; } catch { return false; }
+}
 const PREFIX = `mcp__${SERVER}__`;
 const models = (): Record<ChatSpeed, string> => ({
   fast: process.env.MBE_PHONE_CLAUDE_FAST_MODEL || 'haiku',
@@ -72,7 +81,9 @@ export function createClaudeChatRunner(pairing: PhonePairing, id: string, versio
   };
   const start = async (initial: string): Promise<void> => {
     model = initial;
-    const factory = queryFactory ?? (await import('@anthropic-ai/claude-agent-sdk')).query;
+    const factory = queryFactory ?? await import(SDK).then((sdk: typeof import('@anthropic-ai/claude-agent-sdk')) => sdk.query, () => {
+      throw new ChatRequestError(409, 'Claude is not set up on your computer. Install @anthropic-ai/claude-agent-sdk next to MCP Browser Extension, then start a new chat.');
+    });
     const env: Record<string, string | undefined> = { PATH: process.env.PATH, CLAUDE_AGENT_SDK_CLIENT_APP: `mcp-browser-extension-mobile/${version}` };
     // Claude Code owns its sign-in. Never forward API keys or tokens from this process.
     for (const key of ['HOME', 'USER', 'TMPDIR', 'LANG', 'CLAUDE_CONFIG_DIR']) if (process.env[key]) env[key] = process.env[key];

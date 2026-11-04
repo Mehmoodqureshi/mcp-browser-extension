@@ -125,3 +125,14 @@ test('Codex Fast uses the catalog fast model per turn and Smart keeps the main m
     assert.deepEqual(turns.map((turn) => [turn.model, turn.effort]), [['gpt-6-luna', 'low'], ['gpt-6.1-terra', 'low']]);
   } finally { runner.close(); }
 });
+
+test('without the optional Claude package the phone is offered Codex only', async () => {
+  const { claudeChatAvailable } = await import('../src/remote/claude-chat');
+  assert.equal(claudeChatAvailable(() => { throw new Error('missing'); }), false);
+  assert.equal(claudeChatAvailable(() => '/sdk.mjs'), true);
+  const chats = new PhoneChat(() => ({ run: async () => {}, close() {} }), () => {}, 300_000, ['codex']);
+  try {
+    assert.deepEqual(chats.request('phone', { action: 'status' }).agents, ['codex']);
+    assert.throws(() => chats.request('phone', { action: 'reset', agent: 'claude' }), /not available/);
+  } finally { chats.close(); }
+});

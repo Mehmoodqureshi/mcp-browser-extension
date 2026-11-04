@@ -23,8 +23,8 @@ import { requireAccess } from '../access';
 import type { Policy } from '../security/policy';
 import { keyMatches } from './key';
 import type { PhonePairing } from './phone-pairing';
-import { ChatRequestError, createCodexChatRunner, PhoneChat } from './phone-chat';
-import { createClaudeChatRunner } from './claude-chat';
+import { CHAT_AGENTS, ChatRequestError, createCodexChatRunner, PhoneChat } from './phone-chat';
+import { claudeChatAvailable, createClaudeChatRunner } from './claude-chat';
 
 /** Largest JSON-RPC body accepted; tool calls are small, uploads go by path. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -103,7 +103,7 @@ export async function startHttpMcp(opts: HttpMcpOptions): Promise<HttpMcp> {
   const principals = new Map<string, string>();
   const chats = opts.phoneChat instanceof PhoneChat ? opts.phoneChat : opts.phoneChat && opts.phonePairing
     ? new PhoneChat((id, agent) => (agent === 'claude' ? createClaudeChatRunner : createCodexChatRunner)(opts.phonePairing!, id, opts.version, opts.policy, opts.accessGuard),
-      (id) => opts.phonePairing!.identity(id).assertAccess?.()) : undefined;
+      (id) => opts.phonePairing!.identity(id).assertAccess?.(), undefined, claudeChatAvailable() ? CHAT_AGENTS : ['codex']) : undefined;
   const removeListener = opts.phonePairing?.onRemove((id) => {
     chats?.remove(id);
     for (const [session, principal] of principals) {

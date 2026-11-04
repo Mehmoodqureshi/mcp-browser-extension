@@ -1,3 +1,29 @@
+## 0.9.37 - 2026-11-04
+
+Suspicious-site checks are on by default, the popup uses the website's
+colours, and a computer can be paired with a phone. The Chrome extension
+moves to 0.9.37.
+
+- feat: local suspicious-site checks are on by default. After one Chrome
+  permission grant (Allow website access), ordinary sites work without an
+  Allow request, while flagged addresses and risky login forms wait for the
+  person and show their reasons. Named-site approval remains available.
+- feat: the popup and Settings use the website's colour palette.
+- feat: phone pairing. Phone access in the popup shows a two-minute QR code;
+  the phone is approved in the extension after comparing a six-digit code and
+  keeps the paired profile, allowed websites and Stop access rules. Remove
+  access revokes it at once.
+- feat: `--relay <url>` links this computer to a relay server, so remote MCP
+  clients and paired phones can reach it through a fixed address.
+- feat: optional phone chat (`MBE_PHONE_CHAT=1`) drives the browser through
+  the computer's own Codex or Claude Code sign-in, chosen per conversation,
+  with Fast or Smart per message. The assistant only gets the browser tools.
+  Claude needs the optional `@anthropic-ai/claude-agent-sdk` package; it is
+  not installed by default.
+- fix: back-to-back refusals of different sites are recorded one at a time,
+  so the popup no longer opens twice and no blocked site is lost.
+- ci: the browser E2E suite runs on every push and before every release.
+
 ## 0.9.36 - 2026-10-28
 
 Server-only fix; the Chrome extension stays at 0.9.35.

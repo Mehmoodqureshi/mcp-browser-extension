@@ -42,7 +42,7 @@ export class PhoneChat {
   private version = 0;
   private closed = false;
   private readonly sweep: NodeJS.Timeout;
-  constructor(private readonly create: (id: string, agent: ChatAgent) => ChatRunner, private readonly assertAccess: (id: string) => void, private readonly timeoutMs = 300_000) {
+  constructor(private readonly create: (id: string, agent: ChatAgent) => ChatRunner, private readonly assertAccess: (id: string) => void, private readonly timeoutMs = 300_000, private readonly agents: readonly ChatAgent[] = CHAT_AGENTS) {
     this.sweep = setInterval(() => {
       for (const [id, chat] of this.chats) if (Date.now() - chat.touched > 30 * 60_000) this.remove(id);
     }, 60_000); this.sweep.unref();
@@ -51,13 +51,13 @@ export class PhoneChat {
     if (this.closed) throw new ChatRequestError(503, 'Chat is shutting down. Reconnect to your computer.');
     this.assertAccess(id);
     if (!body || !['status', 'send', 'stop', 'reset'].includes(body.action)) throw new ChatRequestError(400, 'Choose a valid chat action.');
-    if (body.agent !== undefined && !CHAT_AGENTS.includes(body.agent)) throw new ChatRequestError(400, 'Choose Codex or Claude.');
+    if (body.agent !== undefined && !this.agents.includes(body.agent)) throw new ChatRequestError(400, this.agents.length > 1 ? 'Choose Codex or Claude.' : 'That assistant is not available on this computer.');
     if (body.speed !== undefined && !CHAT_SPEEDS.includes(body.speed)) throw new ChatRequestError(400, 'Choose Fast or Smart.');
     let chat = this.chats.get(id);
     if (!chat) {
       if (this.chats.size >= 8) throw new ChatRequestError(429, 'Too many phone conversations. Try again later.');
-      const agent: ChatAgent = body.action === 'reset' && body.agent ? body.agent : 'codex';
-      chat = { snapshot: { version: ++this.version, state: 'ready', messages: [], activity: '', agent, agents: [...CHAT_AGENTS], speeds: [...CHAT_SPEEDS] }, seen: new Set(), generation: 0, touched: Date.now(), waiters: new Set() };
+      const agent: ChatAgent = body.action === 'reset' && body.agent ? body.agent : this.agents[0];
+      chat = { snapshot: { version: ++this.version, state: 'ready', messages: [], activity: '', agent, agents: [...this.agents], speeds: [...CHAT_SPEEDS] }, seen: new Set(), generation: 0, touched: Date.now(), waiters: new Set() };
       this.chats.set(id, chat);
     }
     chat.touched = Date.now();
