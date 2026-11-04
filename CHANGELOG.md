@@ -1,8 +1,10 @@
-## 0.9.37 - 2026-11-04
+## 0.9.38 - 2026-11-04
 
 Suspicious-site checks are on by default, the popup uses the website's
 colours, and a computer can be paired with a phone. The Chrome extension
-moves to 0.9.37.
+moves to 0.9.38. 0.9.37 was tagged but never published: a slow-drawing
+browser test ran past its time budget on CI runners; the test now leaves
+room for slower machines, and everything planned for 0.9.37 ships here.
 
 - feat: local suspicious-site checks are on by default. After one Chrome
   permission grant (Allow website access), ordinary sites work without an
