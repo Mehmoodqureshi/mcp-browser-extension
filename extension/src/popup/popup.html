@@ -3,47 +3,9 @@
   <head>
     <meta charset="utf-8" />
     <title>MCP Browser Extension</title>
+    <link rel="stylesheet" href="brand.css" />
     <link rel="stylesheet" href="activity-dashboard.css" />
     <style>
-      :root {
-        --bg: #ffffff;
-        --panel: #f6f7f9;
-        --card: #ffffff;
-        --fg: #0f172a;
-        --muted: #64748b;
-        --line: #e6e8ec;
-        --ok: #16a34a;
-        --ok-text: #15803d;
-        --ok-soft: #dcfce7;
-        --warn: #c2410c;
-        --warn-soft: #fff1e6;
-        --bad: #dc2626;
-        --accent: oklch(0.56 0.19 255);
-        --accent-foreground: oklch(0.99 0 0);
-        --accent-2: var(--accent);
-        --ring: oklch(0.56 0.19 255 / 35%);
-        --shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 4px 14px rgba(15, 23, 42, 0.06);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #0b0d12;
-          --panel: #11141b;
-          --card: #161a23;
-          --fg: #e8ebf2;
-          --muted: #8b93a7;
-          --line: #232836;
-          --ok: #34d399;
-          --ok-text: #34d399;
-          --ok-soft: rgba(52, 211, 153, 0.12);
-          --warn: #fb923c;
-          --warn-soft: rgba(251, 146, 60, 0.1);
-          --accent: oklch(0.7 0.16 255);
-          --accent-foreground: oklch(0.12 0.02 255);
-          --accent-2: var(--accent);
-          --ring: oklch(0.7 0.16 255 / 45%);
-          --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 20px rgba(0, 0, 0, 0.35);
-        }
-      }
       * { box-sizing: border-box; }
       html { width: 360px; min-width: 360px; scrollbar-width: none; }
       html::-webkit-scrollbar { display: none; }
@@ -135,8 +97,8 @@
       button { min-height: 32px; font: inherit; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
       button:hover { border-color: color-mix(in srgb, var(--fg) 25%, var(--line)); }
       button:active { background: var(--panel); }
-      button.primary { border-color: transparent; color: var(--accent-foreground); background: var(--accent); }
-      button.primary:hover { background: color-mix(in oklch, var(--accent) 88%, var(--fg)); }
+      button.primary { border-color: var(--button-primary-line); color: var(--button-primary-fg); background: var(--button-primary-bg); }
+      button.primary:hover { background: var(--button-primary-hover); }
       button.ghost { background: transparent; border-color: transparent; color: var(--muted); padding: 6px 8px; }
       button.ghost:hover { color: var(--fg); background: var(--panel); }
       button:disabled { cursor: wait; opacity: 0.6; }

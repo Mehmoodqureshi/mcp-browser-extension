@@ -1,0 +1,63 @@
+/* Website palette (mcp-browser-extension.com), shared by the popup and Settings.
+   Light matches the docs light theme; dark matches the docs/product dark theme.
+   Status colors (ok/warn/bad) are extension-only: the website has no equivalents. */
+:root {
+  color-scheme: light dark;
+  accent-color: var(--accent);
+  --bg: #f7f8fc;
+  --panel: #edf0f7;
+  --card: #ffffff;
+  --fg: #161b2c;
+  --muted: #606a80;
+  --line: #dce1ec;
+  --ok: #16a34a;
+  --ok-text: #15803d;
+  --ok-soft: #dcfce7;
+  --warn: #c2410c;
+  --warn-soft: #fff1e6;
+  --bad: #dc2626;
+  --bad-text: #b91c1c;
+  --bad-line: #fca5a5;
+  --bad-soft: #fef2f2;
+  /* Slightly darker than the website's 0.58 so white button text keeps 4.5:1. */
+  --accent: oklch(0.56 0.19 255);
+  --accent-foreground: oklch(0.99 0 0);
+  --accent-2: var(--accent);
+  --ring: oklch(0.56 0.19 255 / 35%);
+  --button-primary-bg: var(--accent);
+  --button-primary-fg: var(--accent-foreground);
+  --button-primary-line: transparent;
+  --button-primary-hover: color-mix(in oklch, var(--accent) 88%, var(--fg));
+  --shadow: 0 1px 2px rgba(22, 27, 44, 0.06), 0 4px 14px rgba(22, 27, 44, 0.06);
+  /* Settings reads these names through activity-dashboard.css. */
+  --site-primary: var(--accent);
+  --site-primary-foreground: var(--accent-foreground);
+  --site-ring: var(--accent);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #07090d;
+    --panel: #131d2b;
+    --card: #101722;
+    --fg: #f5f7fc;
+    --muted: #a3adbd;
+    --line: #ffffff1c;
+    --ok: #34d399;
+    --ok-text: #34d399;
+    --ok-soft: rgba(52, 211, 153, 0.12);
+    --warn: #fb923c;
+    --warn-soft: rgba(251, 146, 60, 0.1);
+    --bad-text: #fca5a5;
+    --bad-line: #7f1d1d;
+    --bad-soft: #450a0a;
+    --accent: #a7c7ff;
+    --accent-foreground: #101722;
+    --ring: #a7c7ff73;
+    /* The website's outlined navy action button ("Add to Chrome"). */
+    --button-primary-bg: #1a2c48;
+    --button-primary-fg: #e6efff;
+    --button-primary-line: #789ed180;
+    --button-primary-hover: #243c60;
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 20px rgba(0, 0, 0, 0.35);
+  }
+}

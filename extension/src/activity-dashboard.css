@@ -1,16 +1,16 @@
 .access-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .access-controls button { margin: 0; min-height: 34px; }
-#access-stop { color: #b91c1c; border: 1px solid #fca5a5; background: transparent; }
-#access-stop:hover { background: #fef2f2; }
+#access-stop { color: var(--bad-text); border: 1px solid var(--bad-line); background: transparent; }
+#access-stop:hover { background: var(--bad-soft); }
 #access-note, #activity-note { font-size: 12px; line-height: 1.5; }
-#access-note[data-error="true"], #activity-note[data-error="true"] { color: #b91c1c; }
+#access-note[data-error="true"], #activity-note[data-error="true"] { color: var(--bad-text); }
 .activity-list { list-style: none; margin: 8px 0; padding: 0; }
 body:not([data-view="popup"]) .activity-list {
   max-height: 24rem;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-inline-end: 8px;
-  scrollbar-color: var(--site-primary, #2563eb) #f3f4f6;
+  scrollbar-color: var(--site-primary) var(--panel);
   scrollbar-width: thin;
 }
 body:not([data-view="popup"]) .activity-list:focus-visible { outline: 2px solid var(--site-ring, #2563eb); outline-offset: 2px; }
@@ -36,8 +36,3 @@ details[open] > .activity-row::before { transform: rotate(45deg); }
 #activity-filter { max-width: 100%; }
 #activity-section button:focus-visible, .access-controls button:focus-visible, #activity-filter:focus-visible, .activity-help summary:focus-visible, .activity-row:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; }
 [hidden] { display: none !important; }
-@media (prefers-color-scheme: dark) {
-  body[data-view="popup"] #access-stop { color: #fca5a5; border-color: #7f1d1d; }
-  body[data-view="popup"] #access-stop:hover { background: #450a0a; }
-  body[data-view="popup"] #access-note[data-error="true"], body[data-view="popup"] #activity-note[data-error="true"] { color: #fca5a5; }
-}

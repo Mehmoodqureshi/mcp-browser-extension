@@ -57,6 +57,7 @@ if (previousManifest) {
 }
 copyFileSync(join(extRoot, 'src/options/options.html'), join(outDir, 'options.html'));
 copyFileSync(join(extRoot, 'src/popup/popup.html'), join(outDir, 'popup.html'));
+copyFileSync(join(extRoot, 'src/brand.css'), join(outDir, 'brand.css'));
 copyFileSync(join(extRoot, 'src/activity-dashboard.css'), join(outDir, 'activity-dashboard.css'));
 copyFileSync(join(extRoot, 'src/site-protection.css'), join(outDir, 'site-protection.css'));
 // Icons sit flat in the root: the home-folder mirror copies top-level files only.
