@@ -150,6 +150,24 @@ receive results within your allowed sites after you approve each session in Chro
 the local HTTP endpoint; its URL includes the access key and must stay private.
 Restart with `--rotate-remote-key` to revoke access.
 
+With `--relay <url>`, the server connects outward to a relay server you choose,
+and remote requests and their browser results pass through that relay. The relay
+is operated by whoever runs it; this project does not run one for other people.
+
+**Phone pairing (optional).** Phone access in the extension creates a single-use
+QR invitation that expires after two minutes. A phone that scans it is approved
+only after you compare a six-digit code in the extension. The server stores, in
+its data folder, each phone's id and name, a hash of its access credential, a
+signing key used for its app approval, and its approval and expiry times. Access
+lasts 30 days; **Remove access** revokes it at once. A paired phone can request
+tab lists, page text and page captures within the same allowed sites and Stop
+access rules as this Chrome profile; those results travel through your relay to
+the phone, which keeps them in memory only. Optional phone chat, enabled on the
+computer with `MBE_PHONE_CHAT=1`, sends your messages and the browser results it
+needs to the Codex or Claude account already signed in on that computer, under
+that provider's terms; conversations are kept in memory only and cleared after
+30 idle minutes.
+
 By default, the server asks for an email the first time you use a browser tool. The
 website sends a Firebase email sign-in link; opening it and confirming
 **Verify this device** verifies the address and
