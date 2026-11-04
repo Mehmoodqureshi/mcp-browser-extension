@@ -9,6 +9,27 @@ import { createBrowserEmailPrompt, openBrowserEmailPrompt, type BrowserEmailProm
 
 type AccessState = { deviceId: string; deviceSecret: string; challengeId?: string; verified?: boolean };
 const SITE = (runtimeEnv('ACCESS_API') ?? 'https://mcp-browser-extension.com/api/access').replace(/\/$/, '');
+const RELAY_PASS_API = runtimeEnv('RELAY_PASS_API') ?? 'https://mcp-browser-extension.com/api/relay/pass';
+
+export type RelayPassResult = { ok: true; pass: string; expiresAt: number } | { ok: false; status: number; message: string };
+
+/** Ask the website for a shared-relay pass using this computer's verified device identity. */
+export async function requestRelayPass(dataDir: string): Promise<RelayPassResult> {
+  const state = loadOrCreate(dataDir);
+  try {
+    const response = await fetch(RELAY_PASS_API, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId: state.deviceId, deviceSecret: state.deviceSecret }), signal: AbortSignal.timeout(8000),
+    });
+    let data: Record<string, unknown> = {};
+    try { const value: unknown = await response.json(); if (value && typeof value === 'object') data = value as Record<string, unknown>; } catch { /* reported below */ }
+    if (response.ok && typeof data.pass === 'string' && typeof data.expiresAt === 'number') return { ok: true, pass: data.pass, expiresAt: data.expiresAt };
+    const message = typeof data.error === 'string' && data.error.length < 300 ? data.error : `the website answered ${response.status}`;
+    return { ok: false, status: response.status, message };
+  } catch {
+    return { ok: false, status: 0, message: 'could not reach mcp-browser-extension.com' };
+  }
+}
 let accessPollMs = 2_000;
 let accessWaitMs = 45_000;
 type AccessOutcome = { status: 'verified' | 'pending' | 'input-required' | 'expired' | 'denied' | 'unavailable' | 'cancelled'; message: string };

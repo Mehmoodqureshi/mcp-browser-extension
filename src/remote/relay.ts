@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 
 import { resolveSecret } from './key';
+import { runtimeEnv } from '../compat';
 
 const TOKEN_FILE = 'relay-token';
 const RETRY_MIN_MS = 1_000;
@@ -40,10 +41,21 @@ export interface RelayLink {
   stop(): void;
 }
 
+/** Shared relay: a pass from the website, fetched before each link and renewed when it nears expiry. */
+export interface RelayPassProvider {
+  get(): Promise<string>;
+  /** The relay refused the pass: fetch a new one next time. */
+  invalidate(): void;
+}
+export class RelayPassError extends Error {
+  constructor(message: string, readonly retryMs: number) { super(message); }
+}
+
 export interface RelayOptions {
   /** The relay's base URL, e.g. https://relay.example.com; the link dials `<url>/connect`. */
   url: string;
-  token: string;
+  /** The owner's fixed relay token, or a pass provider for the shared relay. */
+  token: string | RelayPassProvider;
   localPort: number;
   log: (message: string) => void;
   /** Each time the relay accepts this computer, with the address clients use. */
@@ -155,16 +167,34 @@ export function connectRelay(opts: RelayOptions): RelayLink {
 
   function open(): void {
     if (stopped) return;
-    const ws = new WebSocket(target, { headers: { authorization: `Bearer ${opts.token}` } });
+    const provider = typeof opts.token === 'string' ? undefined : opts.token;
+    if (!provider) return dial(opts.token as string);
+    provider.get().then((pass) => dial(pass), (err: unknown) => {
+      if (stopped) return;
+      const message = err instanceof Error ? err.message : String(err);
+      if (!outageLogged) { outageLogged = true; opts.log(`shared relay: ${message}`); }
+      // An uninvited or unverified computer waits longer instead of polling the website.
+      const wait = err instanceof RelayPassError ? err.retryMs : retryMs;
+      retryTimer = setTimeout(open, wait);
+      retryMs = Math.min(retryMs * 2, RETRY_MAX_MS);
+    });
+  }
+
+  function dial(token: string): void {
+    if (stopped) return;
+    const provider = typeof opts.token === 'string' ? undefined : opts.token;
+    const ws = new WebSocket(target, { headers: { authorization: `Bearer ${token}` } });
     socket = ws;
     let alive = true;
     let ping: NodeJS.Timeout | undefined;
 
     ws.on('unexpected-response', (_req, res) => {
+      const refused = res.statusCode === 401 || res.statusCode === 403;
+      if (refused) provider?.invalidate();
       if (!outageLogged) {
         outageLogged = true;
-        opts.log(res.statusCode === 401 || res.statusCode === 403
-          ? 'the relay refused this computer: its relay token does not match the one set on the relay server.'
+        opts.log(refused
+          ? (provider ? 'the shared relay refused this computer\'s pass; fetching a new one.' : 'the relay refused this computer: its relay token does not match the one set on the relay server.')
           : `the relay answered ${res.statusCode}; retrying`);
       }
       ws.terminate();
@@ -203,8 +233,10 @@ export function connectRelay(opts: RelayOptions): RelayLink {
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code) => {
       clearInterval(ping);
+      // The relay ends a link whose pass expired; the next link fetches a fresh pass.
+      if (code === 4001) provider?.invalidate();
       if (socket === ws) socket = null;
       dropInflight();
       opts.onOffline?.();
@@ -229,5 +261,33 @@ export function connectRelay(opts: RelayOptions): RelayLink {
       dropInflight();
       socket?.close();
     },
+  };
+}
+
+/** The shared relay on mcp-browser-extension.com; invited computers link here with a pass. */
+export const SHARED_RELAY_URL = runtimeEnv('SHARED_RELAY_URL') || 'https://origin.mcp-browser-extension.com';
+const RENEW_BEFORE_MS = 24 * 60 * 60_000;
+
+type PassResult = { ok: true; pass: string; expiresAt: number } | { ok: false; status: number; message: string };
+
+/**
+ * Caches the website's pass and renews it a day before it expires. Refusals
+ * wait longer: an uninvited computer retries every ten minutes, not every 30 s.
+ */
+export function sharedPassProvider(request: () => Promise<PassResult>, now: () => number = Date.now): RelayPassProvider {
+  let cached: { pass: string; expiresAt: number } | undefined;
+  return {
+    async get() {
+      if (cached && cached.expiresAt - now() > RENEW_BEFORE_MS) return cached.pass;
+      const result = await request();
+      if (result.ok) { cached = { pass: result.pass, expiresAt: result.expiresAt }; return result.pass; }
+      cached = undefined;
+      const wait = result.status === 401 || result.status === 403 ? 10 * 60_000 : result.status === 503 ? 5 * 60_000 : 30_000;
+      const hint = result.status === 403 && /verif/i.test(result.message)
+        ? `${result.message} Use any browser tool once to verify this computer's email.`
+        : result.message;
+      throw new RelayPassError(hint, wait);
+    },
+    invalidate() { cached = undefined; },
   };
 }

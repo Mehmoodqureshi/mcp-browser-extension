@@ -449,6 +449,21 @@ tight. `--rotate-remote-key` cuts every client off. The quick-tunnel URL changes
 each start; `--http` alone serves on `127.0.0.1:38018` (`--http-port`) for your
 own tunnel (ngrok, Tailscale Funnel, a reverse proxy). The server runs until Ctrl-C.
 
+### A permanent address and phone pairing — `--shared-relay` (invite only)
+
+```bash
+npx -y mcp-browser-extension@latest --shared-relay --allow-domain example.com --enable-mutations
+```
+
+`--shared-relay` links this computer to the shared relay on mcp-browser-extension.com
+and gives it a permanent private address, `https://mcp-browser-extension.com/remote/c/<id>`,
+that also serves phone pairing (Phone access in the extension popup). It needs a
+verified email that has been invited; until then the server logs that the email is
+not invited and retries every ten minutes. The relay only carries bytes: the remote
+key, app approval and site approval are still checked on your computer. Each invited
+computer is limited to 240 requests a minute and 2 GiB a day. `--relay <url>` links
+to a relay server you run yourself instead.
+
 ### Proxy per Chrome profile — `proxy_status`
 
 Chrome applies a proxy to a whole profile, never one tab, so keep a Chrome profile

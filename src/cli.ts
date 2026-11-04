@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { HELP_TEXT, parseArgs, resolveDataDir } from './config';
-import { bypassEmailVerification, requireAccess } from './access';
+import { bypassEmailVerification, requestRelayPass, requireAccess } from './access';
 import { type GcOptions, gcTasks, listTasks } from './bridge/tasks';
 import { configureManager } from './executor/manager';
 import { createSelector } from './executor/select';
@@ -28,7 +28,7 @@ import { logDebug, logErr, mcpClientInfo, setLogLevel, startMcpServer, stopMcpSe
 import { startHttpMcp } from './remote/http';
 import { resolveRemoteKey } from './remote/key';
 import { startQuickTunnel, type Tunnel } from './remote/tunnel';
-import { connectRelay, relayTokenPath, resolveRelayToken, type RelayLink } from './remote/relay';
+import { SHARED_RELAY_URL, connectRelay, relayTokenPath, resolveRelayToken, sharedPassProvider, type RelayLink } from './remote/relay';
 import { PhonePairing } from './remote/phone-pairing';
 import { startPhoneControl } from './remote/phone-control';
 import { TOOL_NAMES, setProfileBridge, setToolAllowlist } from './mcp/tools';
@@ -575,14 +575,15 @@ async function serveRemote(
     process.stdout.write(`${lines.join('\n')}\n`);
   };
 
-  if (cfg.relay) {
+  if (cfg.relay || cfg.sharedRelay) {
     // The relay names the public address once it accepts this computer; print
     // the connector then, and only once (the link reconnects after outages).
     let announced = false;
-    logErr(`linking to the relay at ${cfg.relay} (relay token: ${relayTokenPath(dataDir)})`);
+    if (cfg.sharedRelay) logErr(`linking to the shared relay at ${SHARED_RELAY_URL} (needs an invited, verified email)`);
+    else logErr(`linking to the relay at ${cfg.relay} (relay token: ${relayTokenPath(dataDir)})`);
     relay = connectRelay({
-      url: cfg.relay,
-      token: resolveRelayToken(dataDir),
+      url: cfg.sharedRelay ? SHARED_RELAY_URL : cfg.relay!,
+      token: cfg.sharedRelay ? sharedPassProvider(() => requestRelayPass(dataDir)) : resolveRelayToken(dataDir),
       localPort: http.port,
       log: (m) => logErr(m),
       onOffline: () => phonePairing.setPublicUrl(),

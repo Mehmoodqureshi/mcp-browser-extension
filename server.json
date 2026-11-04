@@ -8,12 +8,12 @@
     "url": "https://github.com/Mehmoodqureshi/mcp-browser-extension",
     "source": "github"
   },
-  "version": "0.9.38",
+  "version": "0.9.39",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "mcp-browser-extension",
-      "version": "0.9.38",
+      "version": "0.9.39",
       "transport": {
         "type": "stdio"
       },

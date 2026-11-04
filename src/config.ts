@@ -66,6 +66,8 @@ export interface CliConfig {
   tunnel: boolean;
   /** `--relay <url>`: also link to a relay server for a permanent public address. Implies `--http`. */
   relay?: string;
+  /** `--shared-relay`: link to the shared relay on mcp-browser-extension.com with a pass for an invited, verified email. Implies `--http`. */
+  sharedRelay?: boolean;
   /** `--rotate-remote-key`: replace the remote key, cutting off every remote client. */
   rotateRemoteKey: boolean;
   /**
@@ -155,6 +157,7 @@ export function parseArgs(argv: string[]): CliConfig {
   let httpPort = envInt('MCP_BROWSER_EXTENSION_HTTP_PORT') ?? DEFAULT_HTTP_PORT;
   let tunnel = false;
   let relay: string | undefined;
+  let sharedRelay = false;
   let rotateRemoteKey = false;
   let showHelp = false;
   let showVersion = false;
@@ -289,6 +292,10 @@ export function parseArgs(argv: string[]): CliConfig {
         relay = requireValue(argv[++i], '--relay');
         http = true;
         break;
+      case '--shared-relay':
+        sharedRelay = true;
+        http = true;
+        break;
       case '--rotate-remote-key':
         rotateRemoteKey = true;
         break;
@@ -323,6 +330,12 @@ export function parseArgs(argv: string[]): CliConfig {
   }
   if (relay && tunnel) {
     throw new Error('--relay and --tunnel each give a public address; use one');
+  }
+  if (sharedRelay && (relay || tunnel)) {
+    throw new Error('--shared-relay, --relay and --tunnel each give a public address; use one');
+  }
+  if (noEmailVerification && sharedRelay) {
+    throw new Error('--no-email-verification cannot be used with --shared-relay');
   }
   if (relay) {
     let protocol = '';
@@ -388,6 +401,7 @@ export function parseArgs(argv: string[]): CliConfig {
     httpPort,
     tunnel,
     relay,
+    sharedRelay,
     rotateRemoteKey,
     showHelp,
     showVersion,
@@ -481,6 +495,9 @@ Connection:
   --relay <url>          --http plus a link out to your own relay server (for example
                          on AWS), for a permanent public address. The relay checks
                          this computer's relay token, kept in <data-dir>/relay-token.
+  --shared-relay         --http plus a link to the shared relay on mcp-browser-extension.com,
+                         for a permanent address at /remote/c/<id> and phone pairing.
+                         Needs a verified email that the owner has invited.
   --rotate-remote-key    Make a new remote key: every remote client is cut off and
                          needs the new URL.
   --no-auto-update       Run this copy even when a newer mcp-browser-extension is published.

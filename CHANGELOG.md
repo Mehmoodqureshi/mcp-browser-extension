@@ -1,3 +1,14 @@
+## 0.9.39 - 2026-11-04
+
+Server-only; the Chrome extension stays at 0.9.38.
+
+- feat: `--shared-relay` links an invited, email-verified computer to the shared
+  relay on mcp-browser-extension.com with a seven-day pass from the website. The
+  computer gets a permanent private address at /remote/c/<id> for remote MCP
+  clients and phone pairing; the pass renews itself a day before it expires, a
+  refused pass is replaced, and an uninvited computer retries every ten minutes
+  instead of polling the website.
+
 ## 0.9.38 - 2026-11-04
 
 Suspicious-site checks are on by default, the popup uses the website's
