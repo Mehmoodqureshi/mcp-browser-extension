@@ -522,6 +522,11 @@ function withDeadline<T>(tabId: number, work: Promise<T>, ms: number): Promise<T
   });
 }
 
+/** Shown when Chrome blocks attaching a local file because file access is off. */
+const UPLOAD_FILE_ACCESS_MESSAGE =
+  'Chrome blocked attaching the file because file access is off for MCP Browser Extension. ' +
+  'Open chrome://extensions, click Details on MCP Browser Extension, switch on "Allow access to file URLs", then retry.';
+
 /** Run one op against an attached debugger, reusing a session that is still
  *  inside its grace window. Serialized per tab: a second attach on the same tab
  *  throws, and one op's detach would yank the debugger from a concurrent op.
@@ -1556,13 +1561,21 @@ export class ChromeExecutor {
         if (!(await waitForSelector(id, sel, undefined))) {
           throw new CmdError('SELECTOR_NOT_FOUND', `no element for selector: ${sel}`);
         }
+        // Chrome refuses DOM.setFileInputFiles ("Not allowed") unless the person
+        // has switched on file access for this extension. Say how, up front.
+        if (!(await chrome.extension.isAllowedFileSchemeAccess())) throw new CmdError('POLICY_DENIED', UPLOAD_FILE_ACCESS_MESSAGE);
         await withDebugger(id, async (t) => {
           const doc = (await chrome.debugger.sendCommand(t, 'DOM.getDocument', { depth: 0 })) as { root?: { nodeId: number } };
           const rootId = doc.root?.nodeId;
           if (!rootId) throw new CmdError('CDP_ERROR', 'could not read the document root');
           const found = (await chrome.debugger.sendCommand(t, 'DOM.querySelector', { nodeId: rootId, selector: sel })) as { nodeId?: number };
           if (!found.nodeId) throw new CmdError('SELECTOR_NOT_FOUND', `no element for selector: ${sel}`);
-          await chrome.debugger.sendCommand(t, 'DOM.setFileInputFiles', { files, nodeId: found.nodeId });
+          try {
+            await chrome.debugger.sendCommand(t, 'DOM.setFileInputFiles', { files, nodeId: found.nodeId });
+          } catch (err) {
+            if (/Not allowed/i.test(String((err as Error)?.message ?? err))) throw new CmdError('POLICY_DENIED', UPLOAD_FILE_ACCESS_MESSAGE);
+            throw err;
+          }
         });
         return { ok: true };
       }
