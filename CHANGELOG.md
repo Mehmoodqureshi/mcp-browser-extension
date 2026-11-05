@@ -1,3 +1,14 @@
+## 0.9.40 - 2026-11-05
+
+Ships the 0.9.39 server changes, which were tagged but not published, and
+moves the Chrome extension to 0.9.40.
+
+- feat: `--shared-relay` (from 0.9.39) links an invited, email-verified
+  computer to the shared relay on mcp-browser-extension.com.
+- fix: when Chrome blocks a file upload with "Not allowed" because file access
+  is off for the extension, `upload_file` now says how to fix it: switch on
+  "Allow access to file URLs" for MCP Browser Extension in chrome://extensions.
+
 ## 0.9.39 - 2026-11-04
 
 Server-only; the Chrome extension stays at 0.9.38.
